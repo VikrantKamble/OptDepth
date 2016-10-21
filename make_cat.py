@@ -33,7 +33,14 @@ ind = np.where((balFlag == 0) & (data['ZWARNING'] == 0) & (z_use > zmin))[0]
 #---------------------------------------------------------------------------------------
 
 # 2b. Remove DLA's - Ref: (Noterdaeme et al. 2012c) http://adsabs.harvard.edu/abs/2012A%26A...547L...1N
-d_plate, d_mjd, d_fiber = np.loadtxt(X['dla_file'], skiprows=1, usecols=(1,2,3)).T
+dla_data = np.loadtxt(X['dla_file'], skiprows=2, usecols=([1]), dtype='str').T
+d_plate, d_mjd, d_fiber = np.zeros((3, len(dla_data)))
+
+for i  in range(len(dla_data)):
+    vik = dla_data[i].split('-')
+    d_mjd[i], d_plate[i], d_fiber[i] = int(vik[0]), int(vik[1]), int(vik[2])
+
+print "Finished reading in the DLA file"
 
 # Can't modify list iterator in-place
 for i in range(len(ind)):
@@ -62,7 +69,7 @@ start_time = timeit.default_timer()
 
 for k in range(nObj):
 	x = ind[k]
-	print 'On iteration %d out of %d' % (k, nObj)
+	#print 'On iteration %d out of %d' % (k, nObj)
 
 	# Fetch the spectra
 	SpecName = os.path.join(spec_dir, str(plate[x]), 'spec-%04d-%5d-%04d.fits' %(plate[x],mjd[x],fiberid[x]))

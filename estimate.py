@@ -1,8 +1,5 @@
 from __future__ import division
 from scipy.optimize import curve_fit
-from astropy.convolution import convolve, Box1DKernel
-from scipy.optimize import minimize
-from scipy.integrate import quad
 from func_defs import *
 import numpy as np
 import fitsio
@@ -68,12 +65,7 @@ if X['ew_flag'] == 'Yes':
 	print "Writing of EW complete"
 
 # 3. Calculation of Luminosty
-Omega_m, Omega_lam = 0.3, 0.7
-invQ = lambda x: 1.0/np.sqrt(Omega_m*(1+x)**3 + Omega_lam)
 
-def lum_dist(z):
-	c, H0 = 2.99792 * 10**5, 70
-	return (1+z)*(c/H0)*quad(invQ, 0, z)[0]
 
 if X['lum_flag'] == 'Yes':
 	ver = X['lum_ver']

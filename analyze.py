@@ -1,103 +1,83 @@
-from __future__ import division
-from numpy.linalg import inv
-from scipy.optimize import curve_fit
+#!/usr/bin/python
+
+"""
+Calculates the Optical Depth for all the realizations using multiprocessing library
+Input configuration parameters read from the file 'config.ini'
+
+"""
+
 import numpy as np
-import matplotlib.pyplot as plt
-import subprocess
+import multiprocessing as mp
 import json
+import sys
 import os
+import config_read as cfg
+from functools import partial
+import traceback
+import timeit
+import subprocess
 
-X = ConfigMap('CalcTau')
+import calc_tau
+reload(cfg)
 
-ly_line = float(X['line'])
-ly_range = json.loads(X['ly_range'])
+def main(fname , savefile, trim_obs_lam):
 
-z_norm = float(X['z_norm'])
-zdiv = int(X['zdiv'])
+	X = cfg.ConfigMap('CalcTau')
 
-def wrapnorm(z_norm):
-	def refmodel(x, a,b):
-		return a*((1+x)**b - (1 + z_norm)**b)
-	return refmodel
+	ly_range = json.loads(X['ly_range'])
+	ly_line = float(X['line'])
+	z_norm = float(X['z_norm'])
+	zdiv = int(X['zdiv'])
 
-def wrapchi(z,tau,cov, z_norm): 
-	def chisq_cor(tau0, gamma):
-		model = tau0*((1+z)**gamma - (1 + z_norm)**gamma)
-		value = np.dot((model - tau), np.dot(inv(cov), (model - tau).T))
-		chi_abs = ((0.5549 - np.exp(-tau0*(1+3.4613)**gamma))/0.0216)**2 + ((0.5440 - np.exp(-tau0*(1+3.5601)**gamma))/0.0229)**2  # STOLEN FROM NAO'S PAPER
-		return value + chi_abs
-	return chisq_cor
+	print 'The normalization redshift is %.2f' %z_norm
 
-# PRINTS THE ERRORBAR PLOT FOR A GIVEN INPUT DATA FILE
-def graphanize(infile, approxfit=True, truefit=False, linecolor='red', markercolor='k'):
-	f = np.loadtxt(infile).T
-
-	# Read in the redshift, delta tau values for the masterrun and all the bootrun
-	z, m_Tau, C = f[:,0] , f[:,1], f[:,2:]
-
-	# Refine this later
-	clipInd = np.where((isfinite(m_Tau)) & (z > 2.1))[0]
-	z, m_Tau, C = z[clipInd], m_Tau[clipInd], C[clipInd]
-
-	# Calulate the covariance matrix and the correlation matrix
-	Cov, Corr = np.cov(C),  np.corrcoef(C)
-
-	# Plot the graph with errorbars
-	plt.figure()
-	plt.errorbar(z, m_Tau , np.sqrt(np.diag(Cov)), fmt='o', color=markercolor)
-
-	# Plot the approximate(wrong) solution
-	if approxfit==True:
-		popt, pcov = curve_fit(wrapnorm(z_norm), z, m_Tau, sigma=np.sqrt(np.diag(Cov)))
-		plt.plot(z, wrapnorm(z_norm)(z, popt[0], popt[1]), color=linecolor, linewidth=0.6)
-
-	# Plot the correct solution contour
-	if truefit==True:
-		ex1, ex2 = np.sqrt(pcov[0,0]), np.sqrt(pcov[1,1])
-
-		X = np.linspace(popt[0] - 1*ex1, popt[0] + 10*ex1, 300)
-		Y = np.linspace(popt[1] - 10*ex2, popt[1] + 1*ex2, 300)
-
-		CHI_COR = np.zeros((len(X), len(Y)))
-		myfunc = wrapchi(z, m_Tau, Cov, z_norm)
-
-		for i in range(len(X)):
-			for j in range(len(Y)):
-				CHI_COR[i,j] = myfunc(X[i], Y[j])
-
-		l0 = min(np.ravel(CHI_COR)) # +2.30, +6.18 
-	
-		# FINAL CHI_SURFACE PLOT
-		figure()
-		plt.contourf(X, Y, CHI_COR.T, [l0, l0 + 2.30, l0 + 6.18])
-		plt.show()
-
-
-# RUNS CALC_TAU FOR ALL THE FILES IN THE INPUT FOLDER
-def runall(fname, plotit=False, savefile='data.dat', trim_obs_lam = 0):
 	prev_dir = os.getcwd()
+	
+	start = timeit.default_timer() # start the timer
+
 	try:
-		os.chdir(fname)
+		os.chdir(os.environ['OPT_COMPS'] + fname)
+
 		mastername = fname + '.fits'
-		process = subprocess.Popen('ls *boot* > temp', shell=True, stdout=subprocess.PIPE)
+		#process = subprocess.Popen('ls *boot* > temp', shell=True, stdout=subprocess.PIPE)
+
+		# The redshifts and relative optical depth from the main file - WILL BE APPENDED LATER		
+		M_z, M_tau, M_zbins = calc_tau.calc_tau(mastername, ly_range, ly_line, z_norm, False, zdiv, trim_obs_lam = trim_obs_lam)
+
+		# This is the iterable for pool
+		NameFile = np.loadtxt('temp', 'str')
+		print 'The number of bootstrap realizations are : %d' %len(NameFile)
+
+		if len(NameFile) == 0:
+			return 'Error. The file is empty!!'
+
+		myfunc = partial(calc_tau.calc_tau, ly_range = ly_range, ly_line = ly_line, zn = z_norm, zset = True, zdiv = M_zbins, trim_obs_lam = trim_obs_lam) # modify this function to return a single entity
+
+		pool = mp.Pool()
+		result = pool.map(myfunc, list(NameFile))
+
+		pool.close()
+		pool.join()
+
+		result.insert(0, M_tau)
+		result.insert(0, M_z)
+
+		stop = timeit.default_timer() # stop the timer
+		print 'The time taken to do the calculations is', stop - start
+
+		np.savetxt(savefile, result) # save to file for future use
 		
-		M_z, M_tau, M_zbins = calc_tau(mastername, ly_range, ly_line, z_norm, False, zdiv, trim_obs_lam = trim_obs_lam)
-
-		DataArr = [] 
-		DataArr.append(M_z)
-		DataArr.append(M_tau)
-
-		# temp is the file containing boot names
-		with open('temp') as f:
-			for line in f:
-				foo = calc_tau(line,ly_range, ly_line, z_norm, True, M_zbins, trim_obs_lam = trim_obs_lam)[1]
-				DataArr.append(foo)
-
-		np.savetxt(savefile, np.array(DataArr))
-	except Exception as e:
-		print e.__doc__
-		print e.message
 		os.chdir(prev_dir)
 
-		if plotit==True:graphanize('data.dat')
-	os.chdir(prev_dir)
+
+		return np.array(result)
+
+	except:
+
+		os.chdir(prev_dir)
+		traceback.print_exc()
+
+if __name__ == "__main__":
+	main(sys.argv[1], sys.argv[2], sys.argv[3])
+
+

@@ -1,6 +1,7 @@
 from __future__ import division
 from scipy.optimize import curve_fit
 import numpy as np
+import config_read as cfg
 import fitsio
 
 def tau_model(x,a,b,c):
@@ -12,10 +13,10 @@ def calc_tau(infile, ly_range, ly_line, zn=3.0, zset=False, zdiv=50, trim_obs_la
 	flux, invar, z = A[0].read(), A[1].read(), A[2]['REDSHIFT'][:]
 	A.close()
 
-	lyInd = np.where((wl > ly_range[0]) & (wl < ly_range[1]))[0]
+	lyInd = np.where((cfg.wl > ly_range[0]) & (cfg.wl < ly_range[1]))[0]
 
 	# The redshift of the resonant scattering layer
-	ZR = np.array(((np.mat(wl[lyInd]).T * np.mat(1+z))/ly_line - 1).T)
+	ZR = np.array(((np.mat(cfg.wl[lyInd]).T * np.mat(1+z))/ly_line - 1).T)
 
 	F, S = flux[:,lyInd], np.sqrt(1.0/invar[:,lyInd])
 
@@ -43,11 +44,11 @@ def calc_tau(infile, ly_range, ly_line, zn=3.0, zset=False, zdiv=50, trim_obs_la
 	ZR, DT = np.ravel(ZR[:,buck]), np.ravel(DT)
 
 	# REMOVE ALL THE ENTRIES THAT HAVE NO FLUX
-	trimInd = np.where(isfinite(DT))[0]
+	trimInd = np.where(np.isfinite(DT))[0]
 	ZR, DT = ZR[trimInd], DT[trimInd]
 
 	if (zset==False):
-		zbins = np.arange(min(ZR), max(ZR), 0.1)
+		zbins = np.arange(min(ZR), max(ZR), 0.05)
 	else:
 		zbins = zdiv
 
@@ -56,7 +57,10 @@ def calc_tau(infile, ly_range, ly_line, zn=3.0, zset=False, zdiv=50, trim_obs_la
 	Z_val = (zbins[1:] + zbins[:-1]) / 2
 	T_val = [np.mean(DT[ind[i]]) for i in range(len(ind))]
 
-	return Z_val, np.array(T_val), zbins
+	if (zset==False):
+		return Z_val, T_val, zbins
+	else:
+		return T_val
 
 
 

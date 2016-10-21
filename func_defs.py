@@ -1,5 +1,10 @@
 import numpy as np
 from scipy.optimize import curve_fit
+from astropy.convolution import convolve, Box1DKernel
+from scipy.optimize import minimize
+from scipy.integrate import quad
+
+
 
 # HELPER FUNCTION DEFINATIONS 
 def myfunct(wave, a , b):return a*(wave/1450)**b
@@ -16,6 +21,14 @@ def gauss_funct(x, *theta):
 def f_ratio(x, *theta):
 	temp = theta[2:8]
 	return gauss_funct(x, *temp)/lin_funct(x,theta[0],theta[1]) 
+
+Omega_m, Omega_lam = 0.3, 0.7
+invQ = lambda x: 1.0/np.sqrt(Omega_m*(1+x)**3 + Omega_lam)
+
+def lum_dist(z):
+	c, H0 = 2.99792 * 10**5, 70
+	return (1+z)*(c/H0)*quad(invQ, 0, z)[0]
+
 # -----------------------------------------------------------------------------------
 
 # MAIN FUNCTION DEFINATIONS
