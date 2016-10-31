@@ -27,6 +27,7 @@ def plotcomp(infile):
 
 		ax.set_rasterization_zorder(1)
 		ax.set_color_cycle(sns.hls_palette(8,l=.3,s=.8))
+		# http://seaborn.pydata.org/tutorial/color_palettes.html#palette-tutorial
 
 		for count, ele in enumerate(comp):
 			ax.plot(cfg.wl, ele, linewidth=0.3, label=r'$z = %.2f$'%z[count], zorder=0)

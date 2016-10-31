@@ -1,11 +1,14 @@
 from __future__ import division
 from scipy.optimize import curve_fit
-from func_defs import *
+
+
 import numpy as np
 import fitsio
 import timeit
 import os
 import json
+
+from func_defs import *
 
 #Load  in the data from the FITS file - BIG!!!
 A = fitsio.FITS(cat_file, 'rw')
@@ -65,8 +68,6 @@ if X['ew_flag'] == 'Yes':
 	print "Writing of EW complete"
 
 # 3. Calculation of Luminosty
-
-
 if X['lum_flag'] == 'Yes':
 	ver = X['lum_ver']
 

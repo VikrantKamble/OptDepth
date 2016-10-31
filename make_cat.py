@@ -1,6 +1,7 @@
 from __future__ import division
 from collections import OrderedDict
 from PyAstronomy import pyasl
+
 import numpy as np
 import fitsio
 import timeit
@@ -69,7 +70,6 @@ start_time = timeit.default_timer()
 
 for k in range(nObj):
 	x = ind[k]
-	#print 'On iteration %d out of %d' % (k, nObj)
 
 	# Fetch the spectra
 	SpecName = os.path.join(spec_dir, str(plate[x]), 'spec-%04d-%5d-%04d.fits' %(plate[x],mjd[x],fiberid[x]))

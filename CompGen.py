@@ -1,13 +1,13 @@
 from __future__ import division
 import config_read as cfg
 import numpy as np
-import os
-import json
+import matplotlib.pyplot as plt
 import fitsio
-import shutil
-import sys
+import calibrate2
 
-# HELPER FUNCTION TO SET THE REDSHIFT BINS
+reload(calibrate2)
+
+# HELPER FUNCTION TO SET THE REDSHIFT BINS <- Refine this
 def adapt_hist(z, p, n_chop):
 	low, up, z_diff = min(z), max(z), 0.2
 
@@ -54,11 +54,15 @@ def adapt_hist(z, p, n_chop):
 
 	return z_edges
 
-def CompCompute(spec, ivar, z, p, z_edges, n_chop, outfile, boot=False):
+def CompCompute(ext, spec, ivar, z, p, z_edges, n_chop, outfile, boot=False):
 
+	# Total number of bins in redshift space 
 	n_zbins = len(z_edges) - 1
 
+	# Reshuffling for bootstrap and file nomenclature -------------------------------------------
 	if boot==True:
+		outfile += 'boot' +'_' + str(ext) + '.fits'
+
 		bucket = []
 		for i in range(n_zbins):
 			ind = np.where((z > z_edges[i]) & (z <= z_edges[i+1]))[0]
@@ -70,8 +74,11 @@ def CompCompute(spec, ivar, z, p, z_edges, n_chop, outfile, boot=False):
 			bucket += list(ind[bootInd])
 
 		spec, ivar, z, p = spec[bucket], ivar[bucket], z[bucket], p[:,bucket]
+	else:
+		outfile += '_' + str(ext) + '.fits'
+	# -------------------------------------------------------------------------------------------
 
-	NPIX = len(spec[0])
+	NPIX = cfg.NPIX
 
 	Chop1 = np.linspace(min(p[0]), max(p[0]), n_chop[0])
 	Chop2 = np.linspace(min(p[1]), max(p[1]), n_chop[1])
@@ -87,8 +94,6 @@ def CompCompute(spec, ivar, z, p, z_edges, n_chop, outfile, boot=False):
 		# Make the appropriate histogram of the parameters
 		mCube[i] = np.histogram2d(p[0][ind], p[1][ind], bins=(Chop1,Chop2))[0]
 
-	mCount = np.sum(mCube, axis=0) 
-
 	## TRIM BINS WITH NO OBJECTS 
 	# Outer - parameter; Inner - redshift
 	for i in range(n_chop[0]-1):
@@ -96,147 +101,77 @@ def CompCompute(spec, ivar, z, p, z_edges, n_chop, outfile, boot=False):
 			# Sets all bins to 0 if any one bin has no objects in it
 			if (0 in mCube[:,i,j]):mCube[:,i,j]=0 
 
-	## DISTRIBUTE WEIGHTS TO OBJECTS AND CREATE COMPOSITE
-	# digitize and histogram have different binning logic - this takes care of that
-	Chop_dig1, Chop_dig2 = Chop1, Chop2   
-	Chop_dig1[-1] += 0.001
-	Chop_dig2[-1] += 0.001
-
-	# Get the histogram bins where each spectra falls
-	foo = np.digitize(p[0], Chop_dig1)
-	blah = np.digitize(p[1], Chop_dig2)
-
 	mCount = np.sum(mCube, axis=0) 
 
-	# Arrays that will store the composites and respective errors
-	COMP, IVAR = np.zeros((n_zbins, NPIX)), np.zeros((n_zbins, NPIX))
-	RED        = np.zeros(n_zbins)
+	# A. NORMALIZED WEIGHTS ACROSS ALL REDSHIFTS 
+	p0_bins, p1_bins = Chop1, Chop2   
 
-	for i in range(n_zbins):
-		ind = np.where((z > z_edges[i]) & (z <= z_edges[i+1]))[0]
+	p0_bins[-1] += 0.001   # <-- Required since histogram2d and digitize have different
+	p1_bins[-1] += 0.001   #     binning scheme
 
-		loc_spec, loc_ivar = spec[ind], ivar[ind]
+	foo = np.digitize(p[0], p0_bins)
+	blah = np.digitize(p[1], p1_bins)
 
-		# Weight assigned as per the ratio
-		lever = np.where(mCount[foo[ind] - 1, blah[ind] - 1] == 0, 0 , mCount[foo[ind] - 1, blah[ind] - 1]/mCube[i, foo[ind] - 1, blah[ind]- 1])
+	Z_Ind = np.digitize(z, z_edges, right=True) 
 
-		for j in range(NPIX):
-			temp = np.where(loc_ivar[:,j] * lever > 0)[0]
-			if (len(temp) > 0): # to prevent estimates that can't be normalized
-				vals, w2, w1 = loc_spec[:,j][temp], loc_ivar[:,j][temp], lever[temp]
+	F = mCount / mCube
+	F[np.isnan(F)] = 0
 
-				# Trimming outliers with 5 percent rejection
-				outInd = np.where((vals > np.percentile(vals, 5)) & (vals < np.percentile(vals, 95)))[0]
+	# To obtain consistent weights across all redshifts
+	F = F / np.linalg.norm(F, axis=(1,2))[:,None,None]
 
-				if (len(outInd) > 5):
-					# SIMPLE WEIGHTED AVERAGE
-					COMP[i,j] = np.average(vals[outInd], weights=w2[outInd]*w1[outInd])
-					IVAR[i,j] = np.average(w2[outInd], weights=w1[outInd])*len(w2[outInd])
-			
-	# The redshift of the composite:
-		RED[i] = np.average(z[ind], weights=lever)
+	hist_weights = F[Z_Ind-1 , foo-1, blah-1]
 
-	#OVERWRITE THE FILE IF ALREADY PRESENT
-	if os.path.exists(outfile):os.rmdir(outfile) 
+	# 1. PERFORM CALIBRATION IF SPECIFIED
+	if X['calib'] == True:
+		# The rest-frame range used for calibrating
+		rest_range = [[1280,1290],[1320,1330],[1345,1360],[1440,1500]]
 
-	fits = fitsio.FITS(outfile,'rw')
+		# Range used for normalizing the calibration vector
+		obs_min, obs_max = 4100, 4200
 
-	hdict = {'COEFF0':cfg.COEFF0, 'COEFF1': cfg.COEFF1, 'NPIX': cfg.NPIX, 'AUTHOR': cfg.author}
+		# Obtain the required mask that spans the calibration redshifts
+		target = [Z_Ind < np.digitize(X['calib_max'], z_edges, right=True)]
 
-	# Writing operation
-	fits.write(COMP, header=hdict)
-	fits.write(IVAR)
-	fits.write([RED], names=['REDSHIFT'])
+		calibrate2.calibrate(spec[target], ivar[target], z[target], hist_weights[target], rest_range, obs_min, obs_max)
 
-	fits.close()
-	print "Writing of the composite to fits file complete. Filename: %s" %outfile
-	
+	# 2. COMPOSITE GENERATION IF SPECIFIED
+	if X['comp'] == True:	
+		target = np.digitize(X['comp_min'], z_edges, right=True)
 
-# GENERATES COMPOSITES FOR A GIVEN CATALOG AND PARAMETER CUTS
-def CompGen(spec, ivar, tb, sn):
+		#Arrays that will store the composites and respective errors
+		COMP, IVAR = np.zeros((n_zbins, NPIX)), np.zeros((n_zbins, NPIX))
+		RED        = np.zeros(n_zbins)
 
-	z = tb[cfg.drq_z]
+		for i in range(target, n_zbins):
+			ind = np.where(Z_Ind == (i+1))[0]
 
-	X = cfg.ConfigMap('CompGen')
-	if (X == 'FAIL'):sys.exit("Errors! Couldn't locate section in .ini file")
+			loc_spec, loc_ivar, lever = spec[ind], ivar[ind], hist_weights[ind]
 
-	# Load in the basis parameters with their rough span
-	pSpace = X['param_space'].split(',')
-	pSpan = json.loads(X['param_span']) 
+			for j in range(cfg.NPIX):
+				temp = np.where(loc_ivar[:,j] * lever > 0)[0]
 
-	# Overall cuts and specific bin selection
-	pBin = json.loads(X['param_nbins'])
-	pSel = json.loads(X['param_sel'])
+				if (len(temp) > 0): # to prevent estimates that can't be normalized
+					vals, w2, w1 = loc_spec[:,j][temp], loc_ivar[:,j][temp], lever[temp]
 
-	# Grid for histogram rebinning
-	n_chop = json.loads(X['n_chop'])
+					# Trimming outliers with 5 percent rejection
+					outInd = np.where((vals > np.percentile(vals, 5)) & (vals < np.percentile(vals, 95)))[0]
 
-	# Spectra with good fits
-	chi_min, chi_max, snt = float(X['chi_min']), float(X['chi_max']), float(X['sn_threshold'])
+					if (len(outInd) > 5):
+						# SIMPLE WEIGHTED AVERAGE
+						COMP[i,j] = np.average(vals[outInd], weights=w2[outInd]*w1[outInd])
+						IVAR[i,j] = np.average(w2[outInd], weights=w1[outInd])*len(w2[outInd])
+				
+			# The redshift of the composite:
+			RED[i] = np.average(z[ind], weights=lever)
 
-	p1, p2 = tb[pSpace[0]], tb[pSpace[1]]
+		# ----------------------------------------------------------------------------
+		fits = fitsio.FITS(outfile,'rw')
 
-	# Get chi_square on parameter fits
-	chir_p1 = tb['CHISQ_' + pSpace[0]] / tb['DOF_' + pSpace[0]]
-	chir_p2 = tb['CHISQ_' + pSpace[1]] / tb['DOF_' + pSpace[1]]
+		# Writing operation
+		fits.write(COMP)
+		fits.write(IVAR)
+		fits.write([RED], names=['REDSHIFT'])
 
-	x_edges = np.linspace(pSpan[0][0], pSpan[0][1], pBin[0])
-	y_edges = np.linspace(pSpan[1][0], pSpan[1][1], pBin[1])
-
-	# Get the parameter working bin
-	print '%s = %.2f, %.2f \n%s = %.2f, %.2f \n' %(pSpace[0], x_edges[pSel[0]-1], x_edges[pSel[0]], pSpace[1], y_edges[pSel[1]-1], y_edges[pSel[1]]) 
-
-	t = np.where((z > 2.3) & (sn > snt) & (chir_p1 > chi_min) & (chir_p1 <= chi_max) &  (chir_p2 > chi_min) & (chir_p2 <= chi_max) & (p1 > x_edges[pSel[0]-1]) & (p1 <= x_edges[pSel[0]]) & (p2 > y_edges[pSel[1]-1]) & (p2 <= y_edges[pSel[1]]))[0]
-
-	print 'Total number of objects in this bin are: %d \n' %len(t)
-
-	myp = np.array([p1[t],p2[t]])
-
-	# Normalization Range
-	wlInd = np.where((cfg.wl > 1445) & (cfg.wl < 1455))[0]
-
-	# Normalize the spectra and the variance 
-	scale   = np.median(spec[t][:,wlInd], axis=1)
-	myspec  = spec[t] / scale[:, None]
-	myivar  = ivar[t] * (scale[:,None])**2
-	myz = z[t]
-
-	print 'min(z) = %.2f, max(z) = %.2f' %(min(myz), max(myz))
-
-	# Defining the redshift bins
-	z_edges = adapt_hist(myz, myp, n_chop)
-
-	print 'Redshift bins obtained are:', z_edges
-
-	# Name of the output file, tagged for boot
-	outfile = 'comp_' + X['comp_ver'] + '_' + str(pBin[0]) + str(pBin[1]) + '_' + str(pSel[0]) + str(pSel[1]) + '_'  + X['comp_suffix'] 
-
-	# Run suffiicient boot samples to get Covaraince Matrix that is PSD
-	nboot = int(X['nboot'])
-
-	# CREATE A NEW DIRECTORY AND PUT COMPOSITE AND ITS BOOT COMPOSITES THERE -------------------
-	dir_file = os.environ['OPT_COMPS'] + outfile
-
-	if os.path.exists(dir_file) == True:shutil.rmtree(dir_file)
-	
-	# Make directory and cd to it
-	os.makedirs(dir_file)
-	mydir = os.getcwd()
-	os.chdir(dir_file)
-
-	try:
-		CompCompute(myspec, myivar, myz, myp, z_edges, n_chop, outfile+'.fits')
-
-		for k in range(nboot):
-			loc_file = outfile + '_boot' +'_' + str(k)+'.fits'
-			CompCompute(myspec, myivar, myz, myp, z_edges, n_chop, loc_file, True)
-	except Exception as e:
-		print e.__doc__
-		print e.message
-		os.chdir(mydir)
-
-	# Return to the previous working directory
-	os.chdir(mydir)
-
-	return outfile
-	
+		fits.close()
+		print "Writing of the composite to fits file complete. Filename: %s" %outfile

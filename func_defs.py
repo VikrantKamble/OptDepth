@@ -4,8 +4,6 @@ from astropy.convolution import convolve, Box1DKernel
 from scipy.optimize import minimize
 from scipy.integrate import quad
 
-
-
 # HELPER FUNCTION DEFINATIONS 
 def myfunct(wave, a , b):return a*(wave/1450)**b
 

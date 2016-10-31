@@ -11,12 +11,12 @@ import multiprocessing as mp
 import json
 import sys
 import os
-import config_read as cfg
 from functools import partial
 import traceback
 import timeit
 import subprocess
 
+import config_read as cfg
 import calc_tau
 reload(cfg)
 
@@ -51,7 +51,9 @@ def main(fname , savefile, trim_obs_lam):
 		if len(NameFile) == 0:
 			return 'Error. The file is empty!!'
 
-		myfunc = partial(calc_tau.calc_tau, ly_range = ly_range, ly_line = ly_line, zn = z_norm, zset = True, zdiv = M_zbins, trim_obs_lam = trim_obs_lam) # modify this function to return a single entity
+		myfunc = partial(calc_tau.calc_tau, ly_range = ly_range, ly_line = ly_line, zn = z_norm, zset = True, zdiv = M_zbins, trim_obs_lam = trim_obs_lam) 
+
+		# Invoke multiprocessing
 
 		pool = mp.Pool()
 		result = pool.map(myfunc, list(NameFile))
@@ -69,11 +71,9 @@ def main(fname , savefile, trim_obs_lam):
 		
 		os.chdir(prev_dir)
 
-
 		return np.array(result)
 
 	except:
-
 		os.chdir(prev_dir)
 		traceback.print_exc()
 

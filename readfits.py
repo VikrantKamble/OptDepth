@@ -36,10 +36,11 @@ def do_all():
 	comp_folder = CompGen.CompGen(spec, ivar, tb, sn)
 
 	# PLOT COMPOSITES
-	plotting.plotcomp(comp_folder)
+	#plotting.plotcomp(comp_folder)
 
 	# # RUN OPTICAL DEPTH CODE ON COMPOSITES
-	analyze.runall(comp_folder)
+	#analyze.runall(comp_folder)
 
 if __name__=="__main__":
 	do_all()
+
