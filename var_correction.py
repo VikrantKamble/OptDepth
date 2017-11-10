@@ -1,6 +1,6 @@
 """
 1. Estimate the fractional corrections to pipeline varaince using low-z quasars
-2. The corrections are huge - I mean wtf! How bad it can be :(
+2. The corrections are huge 
 3. Fit it by simple functions - Using quasars themselves. 
 
 4. Someone needs to do independent experiements to calibrate the spectrographs if we are to do this correctly
