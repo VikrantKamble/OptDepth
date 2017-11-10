@@ -1,21 +1,24 @@
-from __future__ import division
+# @@ PYTHON SCRIPT TO CREATE A CUSTOM QUASAR CATALOG FROM DR12Q
+
 from collections import OrderedDict
 from PyAstronomy import pyasl
 
 import numpy as np
+import config_read as cfg
 import fitsio
 import timeit
 import os
 
 # 1. Reading the Paris DR12Q catalog
-X = ConfigMap('MakeCat')
+X = cfg.ConfigMap('MakeCat')
 if (X == 'FAIL'):sys.exit("Errors! Couldn't locate section in .ini file")
 
 data = fitsio.read(X['drqcat'], ext = int(X['drq_dataext']))
 
 plate, mjd, fiberid = data['PLATE'], data['MJD'], data['FIBERID'] 
 
-z_use = data[drq_z]
+# Which redshift to use?
+z_use = data[cfg.drq_z]
 
 # Getting the extinction
 g_ext = data['EXTINCTION'][:,1]
@@ -26,37 +29,36 @@ print "The total number of objects in the catalog are %d" %len(ebv)
 
 # BAL flagged from visual inspection 
 # Ref: http://www.sdss.org/dr12/algorithms/boss-dr12-quasar-catalog/
-balFlag = data['BAL_FLAG_VI'] 
+balFlag = data['BAL_FLAG_VI']
 
 # Ref: http://www.sdss.org/dr12/algorithms/bitmasks/#BOSSTILE_STATUS
-targetFlag = data['BOSS_TARGET1']
-ind = np.where((balFlag == 0) & (data['ZWARNING'] == 0) & (z_use > zmin))[0]
+# targetFlag = data['BOSS_TARGET1'] ----- currently using everything
+ind = np.where((balFlag == 0) & (data['ZWARNING'] == 0) & (z_use > float(cfg.zmin)))[0]
 #---------------------------------------------------------------------------------------
 
 # 2b. Remove DLA's - Ref: (Noterdaeme et al. 2012c) http://adsabs.harvard.edu/abs/2012A%26A...547L...1N
 dla_data = np.loadtxt(X['dla_file'], skiprows=2, usecols=([1]), dtype='str').T
-d_plate, d_mjd, d_fiber = np.zeros((3, len(dla_data)))
+dla_list = np.array([dla_data[i].split('-') for i in range(len(dla_data))])
 
-for i  in range(len(dla_data)):
-    vik = dla_data[i].split('-')
-    d_mjd[i], d_plate[i], d_fiber[i] = int(vik[0]), int(vik[1]), int(vik[2])
+myinfo = np.array([mjd[ind], plate[ind], fiberid[ind]]).T
+target = dict((tuple(k),i) for i, k in enumerate(myinfo))
+candidate = [ tuple(i) for i in dla_list.astype(int)]
 
-print "Finished reading in the DLA file"
+# Way faster than before - http://stackoverflow.com/questions/1388818/how-can-i-compare-two-lists-in-python-and-return-matches
+inter = set(target).intersection(candidate) 
+indices = [target[x] for x in inter]
 
-# Can't modify list iterator in-place
-for i in range(len(ind)):
-	dla_ind = np.where((d_plate == plate[ind[i]]) & (d_mjd == mjd[ind[i]]) & (d_fiber == fiberid[ind[i]]))[0]
-	if (len(dla_ind) > 0):ind[i] = -1
+ind[indices] = -1
 
-print "The total number of DLAs removed are %d" % len(find(ind == -1))
+print "The total number of DLAs removed are %d" % len(indices)
 ind = ind[find(ind != -1)]
 
 # In case a test run is needed
-if run != 0:
+if cfg.run != 0:
 	ind = np.random.choice(ind, size = run, replace=False)
 
 #---------------------------------------------------------------------------------------
-
+# Load in the sky-lines file - There are a lot of skylines!!!
 spec_dir = X['spec_dir']
 skylines = np.loadtxt(X['skyline_file']).T
 
@@ -78,12 +80,8 @@ for k in range(nObj):
 	except IOError:
 		continue
 	else:		
-		#flux, invar, loglam, correction = a['flux'],a['ivar']*(a['and_mask']==0),a['loglam'], a['calib_corr']
 		corr_flux, corr_ivar, loglam = a['flux'],a['ivar'],a['loglam']
 		
-		# Apply the corrections(Margala) to flux and invar
-		# corr_flux, corr_ivar = flux*correction, invar/correction**2
-
 		# Deredden the flux vector using the Fitzpatrick (1999) parameterization
 		corr_flux, corr_ivar = pyasl.unred(10**loglam, corr_flux, corr_ivar, ebv=ebv[x])
 
