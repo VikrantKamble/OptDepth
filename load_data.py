@@ -91,6 +91,7 @@ class QSO:
 
 		# VERY BAD QUASAR
 		self.ivar[3576] = 0
+		self.ivar[139526] = 0
 
 	def set_catalog(self, cfile):
 		self.catalog_file = cfile
