@@ -1,121 +1,159 @@
-"""
-1. Generate Composites Given Input Spectra 
-2. Implements Selection Cuts And Histogram Rebinning 
-3. Uses Multiprocessing Library To Generate Bootstrap Realizations
-
-Note: Removes all the files if the folder already exists
-"""
-
-import numpy as np
-import sys
-import json
 import os
+import importlib
 import shutil
+import numpy as np
+import matplotlib.pyplot as plt
+
+from timeit import default_timer as timer
+from scipy.special import erf
+from multiprocessing import Pool
+
+import calibrate
+import comp_create
+import mcmc_skewer
+
+importlib.reload(comp_create)
+importlib.reload(calibrate)
+importlib.reload(mcmc_skewer)
+
+ly_line = 1215.67
 
 
-import config_read as cfg
-import CompGen
+def find_zbins(z, zstart=2.3):
+    curr_zbins = [zstart]
+    curr_z = zstart
 
-def CompGen(spec, ivar, tb, sn):
+    while True:
+        pos = np.where((z > curr_z) & (z <= curr_z + 0.12))[0]
 
-	z = tb[cfg.drq_z]
+        if len(pos) > 50:
+            curr_z += 0.12
+            curr_zbins.append(curr_z)
+        else:
+            pos = np.where((z > curr_z) & (z <= curr_z + 0.18))[0]
+            if len(pos) > 50:
+                curr_z += 0.18
+                curr_zbins.append(curr_z)
+            else:
+                pos = np.where((z > curr_z) & (z <= curr_z + 0.24))[0]
+                if len(pos) > 50:
+                    curr_z += 0.24
+                    curr_zbins.append(curr_z)
+                else:
+                    break
+    return np.array(curr_zbins)
 
-	# LOAD IN FILE SPECIFIC PARAMETERS -----------------------------------------------------
-	X = cfg.ConfigMap('CompGen')
-	if (X == 'FAIL'):sys.exit("Errors! Couldn't locate section in .ini file")
 
-	# Load in the basis parameters with their rough span
-	pSpace = X['param_space'].split(',')
-	pSpan = json.loads(X['param_span']) 
+def makeComp(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, distort=True, skew=False, histbin=False, statistic='mean', frange=[1060, 1170], cutoff=4000, suffix='temp', skewer_index=-1, parallel=False):
 
-	# Overall cuts and specific bin selection
-	pBin = json.loads(X['param_nbins'])
-	pSel = json.loads(X['param_sel'])
+    """
+    Creates composites using a given parameter settings as below
 
-	# Grid for histogram rebinning
-	n_chop = json.loads(X['n_chop'])
+    :param qso: An object of the QSO class 
+    :param snt: Signal-to-noise range of the objects selected
+    :param pSel: A 2D matrix to specify the range of the parameters 
+    :param task: Indicates whether to create 'composite' or to 'calibrate'
+    :param rpix: Remove pixels below a certain 'cutoff' in the observer-frame
+    :param distort: Whether to distort each spectra to a common spectral index
+    :param skew: An artificial distortion according to any function defination to be applied in the observer frame
+    :param histbin: Whether to do histogram rebinning
+    :param statistic: The statistic used in creating the composites - 'mean', 'median', 'MAD', 'likelihood'
+    :param frange: The range in rest-frame over which the composites are created. Set to 0 to span the full rest-frame wavelength
+    :param suffix: The name of the output file - stored in the pwd folder
+    :param skewer_index: The index over which to test mcmc on a skewer
+    :param parallel: Whether to do mcmc_skewer in parallel
+    """
 
-	# Spectra with good fits
-	# SN calculated over the range same as that used for spectral index
-	chi_min, chi_max, snt = float(X['chi_min']), float(X['chi_max']), float(X['sn_threshold'])
+    # A. DATA ACQUISITION AND TRIMMING --------------------------------------------------
+    cut = np.where((qso.sn > snt[0]) & (qso.sn < snt[1])  & (qso.p1 > pSel[0][0]) & (qso.p1 <= pSel[0][1]) & (qso.p2 > pSel[1][0]) & (qso.p2 <= pSel[1][1]))[0]
+    
+    outfile = 'comp_' + suffix
 
-	# Load in the basis parameters
-	p1, p2 = tb[pSpace[0]], tb[pSpace[1]]
+    myspec, myivar = qso.flux[cut], qso.ivar[cut]
+    myz, myp, myalpha = qso.zq[cut], np.array([qso.p1[cut], qso.p2[cut]]), qso.alpha[cut]
+    print('Total number of spectra after selection cuts: %d' %len(myspec))
 
-	# Get chi_square on parameter fits
-	chir_p1 = tb['CHISQ_' + pSpace[0]] / tb['DOF_' + pSpace[0]]
-	chir_p2 = tb['CHISQ_' + pSpace[1]] / tb['DOF_' + pSpace[1]]
+    # B. DATA PREPROCESSING -------------------------------------------------------------
+    # 1. Calibrate the flux vector
+    # if calib:   # DO SOMEHTING HERE
 
-	p0_bins = np.linspace(pSpan[0][0], pSpan[0][1], pBin[0])
-	p1_bins = np.linspace(pSpan[1][0], pSpan[1][1], pBin[1])
+    # The observer wavelengths and redshifts
+    lObs = np.array((np.mat(qso.wl).T * np.mat(1 + myz))).T
+    zMat = lObs / ly_line - 1
+    
+    # 2. Clip pixels off blue-end
+    if rpix:
+        outfile += '_rpix'
+        myivar[lObs < cutoff] = 0
 
-	print '%s = %.2f, %.2f \n%s = %.2f, %.2f \n' %(pSpace[0], p0_bins[pSel[0]-1], p0_bins[pSel[0]], pSpace[1], p1_bins[pSel[1]-1], p1_bins[pSel[1]]) 
+    # 3. Skew spectra in the observer frame - TESTING !!!
+    if skew:
+        outfile += '_skew'
+        skewMat = erf((lObs - 2384) * 0.000743)
+        myspec *= skewMat
+        myivar /= skewMat ** 2
 
-	# ---------------------------------------------------------------------------------------
+    # 4. Distort spectra to remove power-law variations
+    if distort:
+        outfile += '_distort'
+        CenAlpha = np.median(myalpha)
+        distortMat = np.array([(qso.wl / 1450.) ** ele for ele in (CenAlpha - myalpha)])
+        myspec *= distortMat
+        myivar /= distortMat ** 2
+        print('All spectra distorted to alpha:', CenAlpha)
 
-	# Indices of the spectra 'used' - Send all z's and then chose according to composite creation or calibration
-	# Add necessary parameters to the configuration file
+    # C. CALIBRATION VS ESTIMATION ------------------------------------------------------
+    if task == 'calibrate':
+        Lind = (myz > 1.6) & (myz < 4)
+        print('Number of spectra used for calibration are: %d' %Lind.sum())
+        rest_range = [[1350, 1360], [1450, 1500]]
+        # normalization range used
+        obs_min, obs_max = 4680, 4720 
 
-	t = np.where((sn > snt) & (chir_p1 > chi_min) & (chir_p1 <= chi_max) &  (chir_p2 > chi_min) & (chir_p2 <= chi_max) & (p1 > x_edges[pSel[0]-1]) & (p1 <= x_edges[pSel[0]]) & (p2 > y_edges[pSel[1]-1]) & (p2 <= y_edges[pSel[1]]))[0]
+        calibrate.calibrate(qso.wl, myspec[Lind], myivar[Lind], myz[Lind], rest_range, obs_min, obs_max, plotit=True, savefile=True)
 
-	print 'Total number of objects in this bin are: %d \n' %len(t)
+    if frange == 0:
+        lyInd = np.arange(len(qso.wl))
+    else:
+        lyInd = np.where((qso.wl > frange[0]) & (qso.wl < frange[1]))[0]
 
-	# Normalization Range
-	wlInd = np.where((cfg.wl > 1445) & (cfg.wl < 1455))[0]
+    myspec, myivar,  = myspec[:, lyInd], myivar[:, lyInd]
+    zMat, mywave = zMat[:, lyInd], qso.wl[lyInd]
 
-	# Normalize the spectra and the variance #####################
-	scale   = np.median(spec[t][:,wlInd], axis=1)
+    # D. COMPOSITE CREATION IF SPECIFIED ------------------------------------------------
+    if task  == 'composite':
 
-	myspec  = spec[t] / scale[:, None]
-	myivar  = ivar[t] * (scale[:,None])**2
-	##############################################################
-	
-	myz = z[t]
-	myp = np.array([p1[t],p2[t]])
+        zbins = find_zbins(myz)
+    
+        comp_create.compcompute(myspec, myivar, myz, mywave, myp, zbins, qso.n_chop, histbin, statistic, outfile)
 
-	# Defining the redshift bins
-	z_edges = adapt_hist(myz, myp, n_chop)
-	print 'Redshift bins obtained are:', z_edges
+    # E. LIKELIHOOD SKEWER --------------------------------------------------------------
+    if task == 'skewer':
+        myspec, myivar, zMat = myspec[:, skewer_index], myivar[:,skewer_index], zMat[:,skewer_index]
 
-	# Name of the output file
-	outfile = 'comp_' + X['comp_ver'] + '_' + str(pBin[0]) + str(pBin[1]) + '_' + str(pSel[0]) + str(pSel[1]) + '_'  + X['comp_suffix'] 
+        currDir = os.getcwd()
+        destDir =  '../LogLikes' + '/Bin_' + suffix + str(frange[0]) + '_' + str(frange[1])
+        if os.path.exists(destDir): shutil.rmtree(destDir)
 
-	# Run sufficient boot samples to get Covaraince Matrix that is PSD
-	nboot = int(X['nboot'])
+        os.makedirs(destDir)
+        os.chdir(destDir)
 
-	# CREATE A NEW DIRECTORY AND PUT COMPOSITE AND ITS BOOT COMPOSITES THERE -------------------
-	dir_file = os.environ['OPT_COMPS'] + outfile
+        start = timer()
 
-	if os.path.exists(dir_file) == True:shutil.rmtree(dir_file)
-	
-	# Make directory and cd to it
-	os.makedirs(dir_file)
+        # Do not plot graphs while in parallel
+        if parallel:
+            pool = Pool()
+            pool.map(mcmc_skewer.mcmcSkewer, zip(np.array([zMat, myspec, myivar]).T, skewer_index))
+            pool.close()
+            pool.join()
+        else:
+            for count, ele in enumerate(skewer_index):
+                res = mcmc_skewer.mcmcSkewer([np.array([zMat[:,count], myspec[:,count], myivar[:,count]]).T, ele])
 
-	mydir = os.getcwd()
+        stop = timer()
+        print('Time elapsed:', stop - start)
 
-	os.chdir(dir_file)
+        os.chdir(currDir)
 
-	# -------------------------------------------------------------------------------------------
-	# FUNCTION TO ALLOW POOL TO ACCEPT ADDITIONAL ARGUMENTS
-	myfunc = partial(CompGen.CompCompute, spec = myspec, ivar = myivar, z = myz, p = myp, z_edges = z_edges, n_chop = n_chop, outfile = outfile, boot = True)
 
-	try:
-		# Main composite creation
-		CompGen.CompCompute(0, myspec, myivar, myz, myp, z_edges, n_chop, outfile)
-
-		if nboot > 0:
-			pool = mp.Pool()
-			pool.map(myfunc, np.arange(nboot) + 1)
-
-			pool.close()
-			pool.join()
-
-	except Exception as e:
-		print e.__doc__
-		print e.message
-		os.chdir(mydir)
-
-	# Return to the previous working directory
-	os.chdir(mydir)
-
-	return outfile
+# EOF
