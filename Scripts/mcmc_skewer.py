@@ -6,6 +6,7 @@ import scipy.optimize as op
 from getdist import plots, MCSamples
 from astroML.plotting.mcmc import convert_to_stdev
 
+
 ## LIKELIHOOD DEFINATIONS
 # Model with constant LSS variance across redshift
 def lnlike1(theta, xi, yi, ei):
@@ -35,7 +36,7 @@ nll1 = lambda *args: -lnlike1(*args)
 nll2 = lambda *args: -lnlike2(*args)
 
 # Initial guess
-guess1 = [1.5, -8, 4.5, 0.1]
+guess1 = [1.5, -6, 4, 0.1]
 guess2 = [1.5, 0.0017, 3.8, 0.1, 0]
 
 # Configure GetDist
@@ -88,7 +89,8 @@ def mcmcSkewer(bundleObj, logdef=1, niter=1500, do_mcmc=True, plotit=False, retu
 			sampler.reset()
 			print('Burning step completed')
 
-			sampler.run_mcmc(p0, 1500);
+			sampler.run_mcmc(p0, 2500);
+			print('Sampling completed')
 
 			if return_sampler:
 				return sampler.chain
@@ -113,26 +115,38 @@ def mcmcSkewer(bundleObj, logdef=1, niter=1500, do_mcmc=True, plotit=False, retu
 					g.triangle_plot(MC)
 
 				if evalgrid:
+					print('Evaluating on the grid specified')
+
+					# We will be evaluating in a tilted space, to efficiently map the probability surface
 					pdist = MC.get2DDensity('t0', 'gamma')
 
 					# Create a grid
-					tau_grid, gamma_grid = np.mgrid[-11:-2:200j, 1:7:200j]
-					positions = np.vstack([tau_grid.ravel(), gamma_grid.ravel()]).T
+					D = np.array([[-0.85627484,  0.51652047],
+       									[ 0.51652047,  0.85627484]])
+
+					x0, x1 = np.mgrid[-3:6:200j, -0.25:0.25:200j]
+
+					origPos = np.vstack([x0.ravel(), x1.ravel()])
+					modPos = np.dot(np.linalg.inv(D), origPos).T + np.array([-5.0625, 3.145])
+
+					#tau_grid, gamma_grid = np.mgrid[-9:-3:200j, 2:6:200j]
+					#positions = np.vstack([tau_grid.ravel(), gamma_grid.ravel()]).T
 
 					# Evalaute density on a grid
-					pgrid = np.array([pdist.Prob(*ele) for ele in positions])
+					pgrid = np.array([pdist.Prob(*ele) for ele in modPos])
 					# Prune to remove negative densities
 					pgrid[pgrid < 0] = 0
 
 					# Convert to logLikelihood
 					logP = np.log(pgrid)
 					logP -= logP.max()
-					logP = logP.reshape(tau_grid.shape)
+					logP = logP.reshape(x0.shape)
 
 					# Visualize
 					if visualize:
-						plt.figure(figsize=(5,5))
-						plt.contour(tau_grid, gamma_grid, convert_to_stdev(logP), levels=[0.683, 0.95], alpha=0.5, colors='k')
+						fig, ax2 = plt.subplots(1, figsize=(5,5))
+						ax2.contour(x0, x1, convert_to_stdev(logP), levels=[0.683, 0.95], alpha=0.5, colors='k')
+
 						plt.show()
 
 					# Save to disk
