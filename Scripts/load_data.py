@@ -98,6 +98,8 @@ class QSO:
 		self.ivar[3576] = 0
 		self.ivar[139526] = 0
 
+		print('Number of objects in the catalog are: %d' %(len(flux)))
+
 	def set_catalog(self, cfile):
 		self.catalog_file = cfile
 		load_data(cfile)

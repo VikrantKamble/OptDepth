@@ -44,7 +44,7 @@ def find_zbins(z, zstart=2.3):
     return np.array(curr_zbins)
 
 
-def makeComp(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, distort=True, skew=False, histbin=False, statistic='mean', frange=[1060, 1170], cutoff=4000, suffix='temp', skewer_index=-1, parallel=False):
+def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, distort=True, skew=False, histbin=False, statistic='mean', frange=[1060, 1170], cutoff=4000, suffix='temp', skewer_index=-1, parallel=False, triangle=False, visualize=False):
 
     """
     Creates composites using a given parameter settings as below
@@ -146,9 +146,11 @@ def makeComp(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, d
             pool.map(mcmc_skewer.mcmcSkewer, zip(np.array([zMat, myspec, myivar]).T, skewer_index))
             pool.close()
             pool.join()
-        else:
+        elif len(skewer_index) > 1:
             for count, ele in enumerate(skewer_index):
                 res = mcmc_skewer.mcmcSkewer([np.array([zMat[:,count], myspec[:,count], myivar[:,count]]).T, ele])
+        else:
+            res = mcmc_skewer.mcmcSkewer([np.array([zMat, myspec, myivar]).T, skewer_index], triangle=triangle, visualize=visualize)
 
         stop = timer()
         print('Time elapsed:', stop - start)
