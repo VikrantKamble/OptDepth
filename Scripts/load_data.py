@@ -85,7 +85,12 @@ class QSO:
 
 		self.wl = 10 ** (2.73 + np.arange(8140) * 10 ** -4)
 
+		# Indicator flags
+		self.vcorrected = False
+		self.scaled = False
+
 	def load_data(self, cfile):
+		print('Catalog file used is: ' + cfile)
 		self.flux = fitsio.read(cfile, ext=0)
 		self.ivar = fitsio.read(cfile, ext=1)
 
