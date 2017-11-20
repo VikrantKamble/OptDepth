@@ -85,13 +85,20 @@ class QSO:
 
 		self.wl = 10 ** (2.73 + np.arange(8140) * 10 ** -4)
 
+		# Indicator flags
+		self.vcorrected = False
+		self.scaled = False
+
 	def load_data(self, cfile):
+		print('Catalog file used is: ' + cfile)
 		self.flux = fitsio.read(cfile, ext=0)
 		self.ivar = fitsio.read(cfile, ext=1)
 
 		# VERY BAD QUASAR
 		self.ivar[3576] = 0
 		self.ivar[139526] = 0
+
+		print('Number of objects in the catalog are: %d' %(len(flux)))
 
 	def set_catalog(self, cfile):
 		self.catalog_file = cfile
