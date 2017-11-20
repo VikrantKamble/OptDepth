@@ -8,6 +8,7 @@ Parallel processing of input spectra is carried out to minimize computation time
 
 # Thin disc approximation gives alpha_nu = 1/3 
 import numpy as np
+import traceback
 from scipy import optimize as op
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
@@ -15,9 +16,9 @@ import matplotlib.pyplot as plt
 def alpha_func(x, theta):
     return theta[0] * (x/1450.) ** theta[1]
 
-def mychisq(theta, X, y, yerr):
+def mychisq(theta, X, y, yivar):
     model = alpha_func(X, theta)
-    return np.sum((y - model) ** 2 / yerr ** 2, axis=0)
+    return 0.5 * np.sum(yivar * (y - model) ** 2)
 
 def fit_alpha(S, plotit = False, wav_range = [[1280, 1290], [1315, 1325], [1350, 1360], [1440, 1470]]):
     flux, ivar, redshift = S[0], S[1], S[2]
@@ -31,30 +32,34 @@ def fit_alpha(S, plotit = False, wav_range = [[1280, 1290], [1315, 1325], [1350,
         wInd = np.concatenate((wInd, wTemp))
     wave = wl[wInd.astype(int)]
 
-    spectra, error = flux[wInd.astype(int)], 1.0 / np.sqrt(ivar[wInd.astype(int)])
+    spectra, invvar = flux[wInd.astype(int)], ivar[wInd.astype(int)]
 
     # Changes on each iteration
-    l_wave, l_spec, l_error = wave, spectra, error
+    l_wave, l_spec, l_ivar = wave, spectra, invvar
     try:
         chisq_r0 = np.inf
 
         for k in range(3):
-            result = op.minimize(mychisq, [1, -1], args=(l_wave, l_spec, l_error));
+            result = op.minimize(mychisq, [1, -1], args=(l_wave, l_spec, l_ivar));
             chisq_r = result['fun']/(len(l_spec) - 2)
 
             if chisq_r < chisq_r0:
                 chisq_r0 = chisq_r
 
                 # Remove 3 sigma one-sided points
-                outlier = (spectra - alpha_func(wave, result['x'])) / error > -3
-                l_wave, l_spec, l_error = wave[outlier], spectra[outlier], error[outlier]
+                outlier = np.sqrt(invvar) * (spectra - alpha_func(wave, result['x']))  > -3
+                l_wave, l_spec, l_ivar = wave[outlier], spectra[outlier], invvar[outlier]
             else:
                 break
-
+        if result['success'] == True:
+            alpha_sig = np.sqrt(result['hess_inv'][1, 1])
+        else:
+            raise ValueError
+        
         if plotit :
             plt.figure(figsize=(15, 6))
             plt.plot(wl, flux, linewidth=0.4, color='k', label=r'$z = %.2f$' %redshift)
-            plt.plot(wl, alpha_func(wl, result['x']), lw=0.4, color='r', label=r'$\alpha = %.2f, \chi^2_r = %.2f$' %(result['x'][1], chisq_r))
+            plt.plot(wl, alpha_func(wl, result['x']), lw=0.4, color='r', label=r'$\alpha = %.2f, \chi^2_r = %.2f$' %(result['x'][1], 2 * chisq_r))
             plt.xlim(1040, 1800)
             plt.ylim(np.percentile(flux, 1), np.percentile(flux, 99))
             plt.legend()
@@ -62,10 +67,10 @@ def fit_alpha(S, plotit = False, wav_range = [[1280, 1290], [1315, 1325], [1350,
             plt.plot(l_wave, l_spec, '*')
             plt.show()
             
-        sigma = (chisq_r - 1) / np.sqrt(2. / (len(l_wave) - 2))
-        return result['x'], chisq_r, sigma
+        return result['x'], 2 * chisq_r, alpha_sig
 
-    except (RuntimeError, ValueError, TypeError):
+    except:
+        traceback.print_exc()
         return [0, 0], -1, 0
 
 # Local implementation to find spectral index for the full sample using mp library
