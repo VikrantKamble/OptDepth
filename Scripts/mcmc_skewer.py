@@ -43,7 +43,7 @@ guess2 = [1.5, 0.0017, 3.8, 0.1, 0]
 names = ["f0", "t0", "gamma", "sigma"]
 labels = ["f_0", r"\tau_0", "\gamma", "\sigma"]
 
-def mcmcSkewer(bundleObj, logdef=1, niter=1500, do_mcmc=True, plotit=False, return_sampler=False, triangle=False, evalgrid=True, visualize=False):
+def mcmcSkewer(bundleObj, logdef=1, niter=1500, do_mcmc=True, plotit=False, return_sampler=False, triangle=False, evalgrid=True, visualize=False, verbose=False):
 	"""
 	Script to fit simple flux model on each restframe wavelength skewer
 
@@ -58,6 +58,7 @@ def mcmcSkewer(bundleObj, logdef=1, niter=1500, do_mcmc=True, plotit=False, retu
 	evalgrid: Whether to compute loglikelihood on a specified grid
 
 	"""
+	print('Carrying analysis for skewer', bundleObj[1])
 	z, f, ivar = bundleObj[0].T
 
 	ind = np.where(ivar > 0)[0]
@@ -74,8 +75,6 @@ def mcmcSkewer(bundleObj, logdef=1, niter=1500, do_mcmc=True, plotit=False, retu
 		if plotit:
 			ax1.plot(zline, result['x'][0] * np.exp(-np.exp(result['x'][1]) * (1 + zline) ** result['x'][2]), '-r')
 
-		print(result['success'], result['x'])
-
 		if do_mcmc:
 			np.random.seed()
 			nwalkers, ndim = 100, 4
@@ -87,10 +86,9 @@ def mcmcSkewer(bundleObj, logdef=1, niter=1500, do_mcmc=True, plotit=False, retu
 			# Burn-in time - Is this enough?
 			p0,_,_ = sampler.run_mcmc(p0, 500);
 			sampler.reset()
-			print('Burning step completed')
 
 			sampler.run_mcmc(p0, 2500);
-			print('Sampling completed')
+			print('Burn-in and Sampling completed \n')
 
 			if return_sampler:
 				return sampler.chain
@@ -101,8 +99,11 @@ def mcmcSkewer(bundleObj, logdef=1, niter=1500, do_mcmc=True, plotit=False, retu
 
 				estimates = list(map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]), zip(*np.percentile(samps, [16, 50, 84], axis=0))))
 
-				for count, ele in enumerate(names):
-					print(ele + ' = %.3f^{%.3f}_{%.3f}' %(estimates[count][0], estimates[count][1], estimates[count][2]))
+				if verbose:
+					print('Scipy optimize results:')
+					print('Success =',  result['success'] , 'parameters =', result['x'], '\n')
+					for count, ele in enumerate(names):
+						print(ele + ' = %.3f^{%.3f}_{%.3f}' %(estimates[count][0], estimates[count][1], estimates[count][2]))
 
 				if plotit:
 					ax1.plot(zline, CenVal[0] * np.exp(-np.exp(CenVal[1]) * (1 + zline) ** CenVal[2]), '-g')
@@ -115,7 +116,7 @@ def mcmcSkewer(bundleObj, logdef=1, niter=1500, do_mcmc=True, plotit=False, retu
 					g.triangle_plot(MC)
 
 				if evalgrid:
-					print('Evaluating on the grid specified')
+					print('Evaluating on the grid specified \n')
 
 					# We will be evaluating in a tilted space, to efficiently map the probability surface
 					pdist = MC.get2DDensity('t0', 'gamma')

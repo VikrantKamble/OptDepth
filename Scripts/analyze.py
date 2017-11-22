@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from timeit import default_timer as timer
-from scipy.special import erf
+#from scipy.special import erf
 from multiprocessing import Pool
 
 import calibrate
@@ -44,7 +44,7 @@ def find_zbins(z, zstart=2.3):
     return np.array(curr_zbins)
 
 
-def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, distort=True, skew=False, histbin=False, statistic='mean', frange=[1060, 1170], cutoff=4000, suffix='temp', skewer_index=-1, parallel=False, triangle=False, visualize=False):
+def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, distort=True, skew=False, histbin=False, statistic='mean', frange=[1060, 1170], cutoff=4000, suffix='temp', overwrite=True, skewer_index=-1, parallel=False, triangle=False, visualize=False, verbose=False):
 
     """
     Creates composites using a given parameter settings as below
@@ -129,19 +129,23 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
 
     # E. LIKELIHOOD SKEWER --------------------------------------------------------------
     if task == 'skewer':
+        print('Total number of skewers to be analyzed are:', len(skewer_index))
         myspec, myivar, zMat = myspec[:, skewer_index], myivar[:,skewer_index], zMat[:,skewer_index]
 
         currDir = os.getcwd()
         destDir =  '../LogLikes' + '/Bin_' + suffix + str(frange[0]) + '_' + str(frange[1])
-        if os.path.exists(destDir): shutil.rmtree(destDir)
 
-        os.makedirs(destDir)
+        if overwrite:
+            if os.path.exists(destDir): shutil.rmtree(destDir)
+
+            os.makedirs(destDir)
         os.chdir(destDir)
 
         start = timer()
 
         # Do not plot graphs while in parallel
         if parallel:
+            print('Running in parallel now')
             pool = Pool()
             pool.map(mcmc_skewer.mcmcSkewer, zip(np.array([zMat, myspec, myivar]).T, skewer_index))
             pool.close()
@@ -150,7 +154,7 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
             for count, ele in enumerate(skewer_index):
                 res = mcmc_skewer.mcmcSkewer([np.array([zMat[:,count], myspec[:,count], myivar[:,count]]).T, ele])
         else:
-            res = mcmc_skewer.mcmcSkewer([np.array([zMat, myspec, myivar]).T, skewer_index], triangle=triangle, visualize=visualize)
+            res = mcmc_skewer.mcmcSkewer([np.array([zMat, myspec, myivar]).T, skewer_index], triangle=triangle, visualize=visualize, verbose=True)
 
         stop = timer()
         print('Time elapsed:', stop - start)
