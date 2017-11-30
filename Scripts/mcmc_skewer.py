@@ -161,3 +161,95 @@ def mcmcSkewer(bundleObj, logdef=1, niter=2500, do_mcmc=True, plotit=False, retu
 					                list(np.cov(samps[:, 1:3].T).flat)
 					np.savetxt(fileName3, fitparams)
 
+
+def gauss_like(theta, X, C):
+	# define the log-likelihood of the data
+	loc, a, b, c = theta[0:2], np.exp(theta[2]), np.exp(theta[3]), np.exp(theta[4])
+	modC = C + np.array([[a, b],[b, c]])
+	temp = [np.dot(loc - X[i], np.dot(inv(modC[i]), loc - X[i])) + np.log(det(modC[i])) for i in range(len(X))]
+	foo = -0.5 * np.sum(temp, 0)
+	return foo
+
+
+def addLogs(fname, npix=200, s_list=None, getsys=False):
+	"""Plot the log-likelihood surface for each skewer
+	Input: 
+	    fname: the path to the folder containing the files
+
+	Returns:
+	    None
+	    """
+	import os
+	import time
+	import traceback
+	import subprocess
+
+	if not os.path.exists(fname):
+		print('Oops! There is no such folder')
+		return None
+	
+	currdir = os.getcwd()
+	os.chdir(fname)
+
+	try:
+		process = subprocess.Popen('ls gridlnlike* > grid.dat', shell=True, stdout=subprocess.PIPE)
+		time.sleep(3)
+		process = subprocess.Popen('ls fitparams* > params.dat', shell=True, stdout=subprocess.PIPE)
+		time.sleep(3)
+
+		# get the name of the files to load
+		log_names = np.genfromtxt('grid.dat', dtype=str)
+		param_names = np.genfromtxt('params.dat', dtype=str)
+
+		# instantiate containers to hold the data
+		Ls = np.empty((len(log_names), npix, npix))
+		Ps = np.empty((len(log_names), 6))
+
+		suffix = []
+		for i in range(len(Ls)):
+			Ls[i] = np.loadtxt(log_names[i])
+			Ps[i] = np.loadtxt(param_names[i])
+			temp = str.split(ele, '_')
+			suffix.append(int(temp[1][:-4]))
+
+		if s_list is not None:
+			ind = [i for i, ele in enumerate(suffix) if ele in s_list]
+			Ls, Ps = Ls[ind], Ps[ind]
+			suffix = suffix[ind]
+
+		# sort for visualization
+		Ls = [ele for _,ele in sorted(zip(suffix, Ls))]
+		Ps = [ele for _,ele in sorted(zip(suffix, Ps))]
+		suffix.sort()
+
+		# joint pdf
+		j_pdf = np.sum(Ls, 0)
+
+		colormap = plt.cm.rainbow 
+		colors = [colormap(i) for i in np.linspace(0, 1,len(suffix))]
+
+		fig, ax = plt.subplots(1, figsize=(5, 5))
+		for i in range(len(suffix)):
+			CS = ax.contour(x0, x1, convert_to_stdev(K[i]), levels=[0.683, ], linewidths=0.8, colors=(colors[i],))
+			CS.collections[0].set_label(suffix[i])
+		ax.contour(x0, x1, convert_to_stdev(j_pdf), levels=[0.683, 0.95], alpha=0.5, colors='k', linestyles='--')
+		plt.legend(loc = 'upper center', ncol=6)
+		plt.xlabel('x0')
+		plt.ylabel('x1')
+		plt.show()
+
+		if getsys:
+			# means and covariance of all the skewers
+			X = Ps[:, 0:2]
+			covMat = Ps[:, 2:].reshape(-1, 2, 2)
+
+			nll = lambda *args: -gauss_like(*args)
+			res = op.minimize(nll, [-6, 4, 0, 0, 0], args=(X, covMat))
+
+	except:
+		traceback.print_exc()
+		os.chdir(currdir)
+
+	os.chdir(currdir)
+
+
