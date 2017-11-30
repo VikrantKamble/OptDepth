@@ -1,5 +1,5 @@
 import os
-import importlib
+import imp
 import shutil
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,9 +13,9 @@ import calibrate
 import comp_create
 import mcmc_skewer
 
-importlib.reload(comp_create)
-importlib.reload(calibrate)
-importlib.reload(mcmc_skewer)
+imp.reload(comp_create)
+imp.reload(calibrate)
+imp.reload(mcmc_skewer)
 
 ly_line = 1215.67
 
@@ -167,13 +167,13 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
             for count, ele in enumerate(skewer_index):
                 res = mcmc_skewer.mcmcSkewer([np.array([zMat[:,count], myspec[:,count], myivar[:,count]]).T, ele])
         else:
-            res = mcmc_skewer.mcmcSkewer([np.array([zMat, myspec, myivar]).T, skewer_index], triangle=triangle, visualize=visualize, verbose=True)
+            res = mcmc_skewer.mcmcSkewer([np.array([zMat, myspec, myivar]).T, skewer_index], return_sampler=True, triangle=triangle, visualize=visualize, verbose=True)
 
         stop = timer()
         print('Time elapsed:', stop - start)
 
         os.chdir(currDir)
-
+        return res
 
 def transform(xprime):
     D = np.array([[-0.85627484,  0.51652047],[ 0.51652047,  0.85627484]])

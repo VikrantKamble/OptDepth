@@ -1,56 +1,55 @@
 
 # coding: utf-8
 
-# In[1]:
+# # Plot ellipse from covariance matrix
 
-import numpy as np
-import matplotlib.pyplot as plt
-
-from matplotlib.patches import Ellipse
-from scipy.stats import chi2
-
-get_ipython().magic('matplotlib inline')
-get_ipython().magic("run './plot_setup.py'")
+# In[14]:
 
 
-# # Confidence level from n sigma
-# ## $$n\ sig \to CI = erf \left(\frac{n}{\sqrt{2}}\right)$$
-# 
-# ### ppf gives the inverse cumulative distribution, and supplying it an argument (volume) gives the location that encloses that volume
 
-# In[2]:
+def plot_cov_ellipse(pos, cov, nsig=[1], ax=None, fc='none', ec=[0,0,0], a=1, lw=2):
+    """
+    Plots an ellipse enclosing *volume* based on the specified covariance
+    matrix (*cov*) and location (*pos*). Additional keyword arguments are passed on to the 
+    ellipse patch artist.
 
-"""
-Input parameters:
-    pos = Mean
-    cov = Covariance matrix
-    nsig =  the n'th standard deviation to plot
-    ax = Axes instance to stick the ellipse tp
+    Parameters
+    ----------
+        cov : The 2x2 covariance matrix to base the ellipse on
+        pos : The location of the center of the ellipse. Expects a 2-element
+            sequence of [x0, y0].
+        volume : The volume inside the ellipse; defaults to 0.5
+        ax : The axis that the ellipse will be plotted on. Defaults to the 
+            current axis.
+    """
 
-"""
-def plot_ellipse(pos, cov, nsig, ax, fc='none', ec='k', a=1, lw=2, ls='-'):
-    var_x, var_y = cov[0,0], cov[1,1]
-    covar_xy = cov[0,1]
-    
-    sig1 = np.sqrt((var_x + var_y) / 2. + np.sqrt( (var_x - var_y) ** 2 / 4. + covar_xy ** 2))
-    sig2 = np.sqrt((var_x + var_y) / 2. - np.sqrt( (var_x - var_y) ** 2 / 4. + covar_xy ** 2))
-    
-    angle = 0.5 * np.arctan2(2 * covar_xy, (var_x - var_y))
-    
-    # Plot the results
+    import numpy as np
+    from scipy.stats import chi2
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Ellipse
     from scipy.special import erf
 
-    kwargs = {'facecolor':fc, 'edgecolor':ec, 'alpha':a, 'linewidth':lw, 'linestyle':ls}
-    
+
+    def eigsorted(cov):
+        vals, vecs = np.linalg.eigh(cov)
+        order = vals.argsort()[::-1]
+        return vals[order], vecs[:,order]
+
+    if ax is None:
+        ax = plt.gca()
+
+    vals, vecs = eigsorted(cov)
+    theta = np.degrees(np.arctan2(*vecs[:,0][::-1]))
+
+    kwrg = {'facecolor':fc, 'edgecolor':ec, 'alpha':a, 'linewidth':lw}
+
+    # Width and height are "full" widths, not radius
     for ele in nsig:
         scale = np.sqrt(chi2.ppf(erf(ele / np.sqrt(2)), df=2))
-        width = 2 * sig1 * scale
-        height = 2 * sig2 * scale
-        
-        e = Ellipse(xy=pos, width=width, height=height, angle=angle * 180. / np.pi, **kwargs)
-        ax.add_patch(e)
-        ax.set_xlim(pos[0] - 2 * np.sqrt(var_x), pos[0] + 2 * np.sqrt(var_x))
-        ax.set_ylim(pos[1] - 2 * np.sqrt(var_y), pos[1] + 2 * np.sqrt(var_y))
+        width, height = 2 * scale * np.sqrt(vals)
+        ellip = Ellipse(xy=pos, width=width, height=height, angle=theta, **kwrg)
 
-
-
+        ax.add_artist(ellip)
+        ellip.set_clip_box(ax.bbox)
+    ax.set_xlim(pos[0] - 3 * np.sqrt(cov[0,0]), pos[0] + 3 * np.sqrt(cov[0,0]))
+    ax.set_ylim(pos[1] - 3 * np.sqrt(cov[1,1]), pos[1] + 3 * np.sqrt(cov[1,1]))
