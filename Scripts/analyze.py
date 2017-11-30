@@ -4,6 +4,7 @@ import shutil
 import numpy as np
 import matplotlib.pyplot as plt
 
+from scipy.interpolate import interp1d
 from timeit import default_timer as timer
 #from scipy.special import erf
 from multiprocessing import Pool
@@ -44,10 +45,12 @@ def find_zbins(z, zstart=2.3):
     return np.array(curr_zbins)
 
 
-def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, distort=True, skew=False, histbin=False, statistic='mean', frange=[1060, 1170], cutoff=4000, suffix='temp', overwrite=True, skewer_index=-1, parallel=False, triangle=False, visualize=False, verbose=False):
+def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, distort=True, histbin=False, statistic='mean', frange=[1060, 1170], cutoff=4000, suffix='temp', overwrite=True, skewer_index=-1, parallel=False, triangle=False, visualize=False, verbose=False):
 
     """
     Creates composites using a given parameter settings as below
+    ===========================================================================
+    Parameters:
 
     :param qso: An object of the QSO class 
     :param snt: Signal-to-noise range of the objects selected
@@ -82,16 +85,22 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
     zMat = lObs / ly_line - 1
     
     # 2. Clip pixels off blue-end
+    if calib:
+        x, y = np.loadtxt('../Data/final_calib.dat')
+        f = interp1d(x, y)
+
+        mask = (lObs < 3620) | (lObs > 6950)
+        lObs[mask] = np.nan
+
+        corrections = f(lObs)
+        myspec /= corrections
+        myivar *= corrections
+
+        myivar[mask] = 0
+
     if rpix:
         outfile += '_rpix'
         myivar[lObs < cutoff] = 0
-
-    # 3. Skew spectra in the observer frame - TESTING !!!
-    if skew:
-        outfile += '_skew'
-        skewMat = erf((lObs - 2384) * 0.000743)
-        myspec *= skewMat
-        myivar /= skewMat ** 2
 
     # 4. Distort spectra to remove power-law variations
     if distort:
@@ -106,7 +115,8 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
     if task == 'calibrate':
         Lind = (myz > 1.6) & (myz < 4)
         print('Number of spectra used for calibration are: %d' %Lind.sum())
-        rest_range = [[1350, 1360], [1450, 1500]]
+        #rest_range = [[1350, 1360], [1450, 1500]]
+        rest_range = [[1280,1290],[1320,1330],[1345,1360],[1440,1480]]
         # normalization range used
         obs_min, obs_max = 4680, 4720 
 
@@ -135,10 +145,13 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
         currDir = os.getcwd()
         destDir =  '../LogLikes' + '/Bin_' + suffix + str(frange[0]) + '_' + str(frange[1])
 
-        if overwrite:
-            if os.path.exists(destDir): shutil.rmtree(destDir)
-
+        if not os.path.exists(destDir):
             os.makedirs(destDir)
+        else:
+            if overwrite:
+                shutil.rmtree(destDir)
+                os.makedirs(destDir)                
+
         os.chdir(destDir)
 
         start = timer()
@@ -161,5 +174,10 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
 
         os.chdir(currDir)
 
+
+def transform(xprime):
+    D = np.array([[-0.85627484,  0.51652047],[ 0.51652047,  0.85627484]])
+    modPos = np.dot(np.linalg.inv(D), xprime).T + np.array([-5.0625, 3.145])
+    print(modPos)
 
 # EOF

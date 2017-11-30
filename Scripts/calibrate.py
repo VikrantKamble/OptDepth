@@ -25,8 +25,8 @@ def calibrate(wl, spec, ivar, zq, rest_range, norm_min, norm_max, plotit, savefi
 
     for i in range(len(rInd)):
         blah = np.where((lam_obs[:, i] > norm_min) & (lam_obs[:, i] < norm_max) & (civar[:,i] > 0))[0]
-        # nValue[i] = np.average(cflux[:, i][blah], weights=civar[:, i][blah])
-        nValue[i] = np.median(cflux[:, i][blah])
+        nValue[i] = np.average(cflux[:, i][blah], weights=civar[:, i][blah])
+        #nValue[i] = np.median(cflux[:, i][blah])
 
     # Scale fluxes and ivars accordingly
     NormFlux = cflux / nValue
@@ -43,14 +43,14 @@ def calibrate(wl, spec, ivar, zq, rest_range, norm_min, norm_max, plotit, savefi
     for k in range(len(Cvec)):
         bInd = np.where((pixObs > ObsBin[k]) & (pixObs <= ObsBin[k + 1]) & (pixIvar > 0) & np.isfinite(pixFlux))[0]
         if len(bInd) > 5:
-            # Cvec[k] = np.average(pixFlux[bInd], weights=pixIvar[bInd])
-            Cvec[k] = np.median(pixFlux[bInd])
+            Cvec[k] = np.average(pixFlux[bInd], weights=pixIvar[bInd])
+            #Cvec[k] = np.median(pixFlux[bInd])
     Lvec = (ObsBin[1:] + ObsBin[:-1])/2.
 
     if (plotit == True):
         #plt.figure(figsize=(10 , 4))
         good = Cvec != 0
-        plt.plot(Lvec[good], Cvec[good], '-k')
+        plt.plot(Lvec[good], Cvec[good], '-g')
         plt.xlabel(r'$\lambda_{obs}$' , fontsize=20)
         plt.ylabel(r'$Correction$' , fontsize=20)
         # plt.xlim(1.8 , 3)
