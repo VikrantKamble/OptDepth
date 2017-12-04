@@ -39,12 +39,13 @@ names = ["f0", "t0", "gamma", "sigma"]
 labels = ["f_0", r"\tau_0", "\gamma", "\sigma"]
 
 # Create a grid - delegate this to the inputs of this function
-D = np.array([[-0.85627484,  0.51652047],
+shift = np.array([-5.0625, 3.145])
+tilt = np.array([[-0.85627484,  0.51652047],
 						[ 0.51652047,  0.85627484]])
-x0, x1 = np.mgrid[-3:6:200j, -0.25:0.25:200j]
 
+x0, x1 = np.mgrid[-3:6:200j, -0.25:0.25:200j]
 origPos = np.vstack([x0.ravel(), x1.ravel()])
-modPos = np.dot(np.linalg.inv(D), origPos).T + np.array([-5.0625, 3.145])
+modPos = np.dot(np.linalg.inv(tilt), origPos).T + shift
 
 
 def mcmcSkewer(bundleObj, logdef=1, niter=2500, do_mcmc=True, plotit=False, return_sampler=False, triangle=False, evalgrid=True, visualize=False, VERBOSITY=False, seed=None):
@@ -163,12 +164,16 @@ def mcmcSkewer(bundleObj, logdef=1, niter=2500, do_mcmc=True, plotit=False, retu
 
 
 def gauss_like(theta, X, C):
+	from numpy.linalg import inv, det
 	# define the log-likelihood of the data
-	loc, a, b, c = theta[0:2], np.exp(theta[2]), np.exp(theta[3]), np.exp(theta[4])
-	modC = C + np.array([[a, b],[b, c]])
-	temp = [np.dot(loc - X[i], np.dot(inv(modC[i]), loc - X[i])) + np.log(det(modC[i])) for i in range(len(X))]
-	foo = -0.5 * np.sum(temp, 0)
-	return foo
+	loc, a, corr, c = theta[0:2], np.exp(theta[2]), theta[3], np.exp(theta[4])
+	if -1 < corr < 1:
+		b = corr * np.sqrt(a * c)
+		modC = C + np.array([[a, b],[b, c]])
+		temp = [np.dot(loc - X[i], np.dot(inv(modC[i]), loc - X[i])) + np.log(det(modC[i])) for i in range(len(X))]
+		foo = 0.5 * np.sum(temp, 0)
+		return foo
+	return np.inf
 
 
 def addLogs(fname, npix=200, s_list=None, getsys=False):
@@ -183,6 +188,7 @@ def addLogs(fname, npix=200, s_list=None, getsys=False):
 	import time
 	import traceback
 	import subprocess
+	from ellipse_from_cov import plot_cov_ellipse
 
 	if not os.path.exists(fname):
 		print('Oops! There is no such folder')
@@ -209,17 +215,17 @@ def addLogs(fname, npix=200, s_list=None, getsys=False):
 		for i in range(len(Ls)):
 			Ls[i] = np.loadtxt(log_names[i])
 			Ps[i] = np.loadtxt(param_names[i])
-			temp = str.split(ele, '_')
+			temp = str.split(log_names[i], '_')
 			suffix.append(int(temp[1][:-4]))
 
 		if s_list is not None:
 			ind = [i for i, ele in enumerate(suffix) if ele in s_list]
 			Ls, Ps = Ls[ind], Ps[ind]
-			suffix = suffix[ind]
+			suffix = np.array(suffix)[ind]
 
 		# sort for visualization
-		Ls = [ele for _,ele in sorted(zip(suffix, Ls))]
-		Ps = [ele for _,ele in sorted(zip(suffix, Ps))]
+		Ls = np.array([ele for _,ele in sorted(zip(suffix, Ls))])
+		Ps = np.array([ele for _,ele in sorted(zip(suffix, Ps))])
 		suffix.sort()
 
 		# joint pdf
@@ -228,23 +234,43 @@ def addLogs(fname, npix=200, s_list=None, getsys=False):
 		colormap = plt.cm.rainbow 
 		colors = [colormap(i) for i in np.linspace(0, 1,len(suffix))]
 
-		fig, ax = plt.subplots(1, figsize=(5, 5))
+		fig, ax1 = plt.subplots(1, figsize=(5, 5))
 		for i in range(len(suffix)):
-			CS = ax.contour(x0, x1, convert_to_stdev(K[i]), levels=[0.683, ], linewidths=0.8, colors=(colors[i],))
+			CS = ax1.contour(x0, x1, convert_to_stdev(Ls[i]), levels=[0.683, ], linewidths=0.8, colors=(colors[i],))
 			CS.collections[0].set_label(suffix[i])
-		ax.contour(x0, x1, convert_to_stdev(j_pdf), levels=[0.683, 0.95], alpha=0.5, colors='k', linestyles='--')
+		ax1.contour(x0, x1, convert_to_stdev(j_pdf), levels=[0.683, ], alpha=0.5, colors='k', linestyles='--')
 		plt.legend(loc = 'upper center', ncol=6)
-		plt.xlabel('x0')
-		plt.ylabel('x1')
+		plt.xlabel('$x_0$')
+		plt.ylabel('$x_1$')
 		plt.show()
 
 		if getsys:
 			# means and covariance of all the skewers
+			# the assumption is that the data comes from a 2D gaussian 
+			# is neglecting the effects of truncation valid or justifiable?
 			X = Ps[:, 0:2]
 			covMat = Ps[:, 2:].reshape(-1, 2, 2)
 
-			nll = lambda *args: -gauss_like(*args)
-			res = op.minimize(nll, [-6, 4, 0, 0, 0], args=(X, covMat))
+			# this isn't much helpful as the contours are strongly correlated
+			#fig, ax2 = plt.subplots(1)
+			#[plot_cov_ellipse(X[i], covMat[i], nsig=[1, 2], ax=ax2) for i in range(len(X))]
+			[morph_gauss(X[i], covMat[i], ax=ax1) for i in range(len(X))]
+
+			# initial guess for the fit
+			means_, cov_ = np.mean(X, 0), np.mean(covMat, 0)
+			init_ = list(means_) + list([np.log(cov_[0,0]), 0, np.log(cov_[1, 1])])
+
+			# I don't trust this method - check with MCMC
+			res = op.minimize(gauss_like, init_, args=(X, covMat))
+			print(res)
+
+			fit_mean = res['x'][0:2]
+			fit_a, fit_c = np.exp(res['x'][2]), np.exp(res['x'][4])
+			fit_b = res['x'][3] * np.sqrt(fit_a * fit_c)
+			fit_cov = np.array([[fit_a, fit_b], [fit_b, fit_c]])
+
+			print(cov_, '\n', fit_cov)
+			#morph_gauss(fit_mean, fit_cov, ax=ax1)
 
 	except:
 		traceback.print_exc()
@@ -253,3 +279,34 @@ def addLogs(fname, npix=200, s_list=None, getsys=False):
 	os.chdir(currdir)
 
 
+def morph_gauss(pos, cov, ax=None, shift=shift, tilt=tilt):
+	from scipy.special import erf
+	from scipy.stats import chi2
+	import numpy as np
+	import matplotlib.pyplot as plt
+
+	def eigsorted(cov):
+		vals, vecs = np.linalg.eigh(cov)
+		order = vals.argsort()[::-1]
+		return vals[order], vecs[:, order]
+
+	vals, vecs = eigsorted(cov)
+	theta = np.arctan2(*vecs[:,0][::-1])
+
+	scale = np.sqrt(chi2.ppf(erf(1 / np.sqrt(2)), df=2))
+	phi = np.linspace(0, 2 * np.pi, 100)
+
+	p1 = scale * np.sqrt(vals[0]) * np.cos(phi) 
+	p2 = scale * np.sqrt(vals[1]) * np.sin(phi)
+
+	x = pos[0] + p1 * np.cos(theta) - p2 * np.sin(theta)
+	y = pos[1] + p1 * np.sin(theta) + p2 * np.cos(theta)
+	points = np.vstack((x, y))
+
+	modPos = np.dot(tilt, (points - shift[:, None]))
+
+	if ax is None:
+		fig, ax = plt.subplots()
+
+	ax.plot(modPos[0], modPos[1], '-k', lw=0.6)
+	plt.show()
