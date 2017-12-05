@@ -1,14 +1,83 @@
+import numpy as np
 import matplotlib.pyplot as plt
 import os
 import fitsio
-import config_read as cfg
-import seaborn.apionly as sns
 
 
-from matplotlib import rc
-rc('text', usetex=True)
-rc('xtick', labelsize=25) 
-rc('ytick', labelsize=25)
+def plot_cov_ellipse(pos, cov, nsig=[1], ax=None, fc='none', ec=[0,0,0], a=1, lw=2):
+    """
+    Plots an ellipse enclosing *volume* based on the specified covariance
+    matrix (*cov*) and location (*pos*). Additional keyword arguments are passed on to the 
+    ellipse patch artist.
+
+    Parameters
+    ----------
+        cov : The 2x2 covariance matrix to base the ellipse on
+        pos : The location of the center of the ellipse. Expects a 2-element
+            sequence of [x0, y0].
+        volume : The volume inside the ellipse; defaults to 0.5
+        ax : The axis that the ellipse will be plotted on. Defaults to the 
+            current axis.
+    """
+
+    from scipy.stats import chi2
+    from matplotlib.patches import Ellipse
+    from scipy.special import erf
+
+
+    def eigsorted(cov):
+        vals, vecs = np.linalg.eigh(cov)
+        order = vals.argsort()[::-1]
+        return vals[order], vecs[:,order]
+
+    if ax is None:
+        ax = plt.gca()
+
+    vals, vecs = eigsorted(cov)
+    theta = np.degrees(np.arctan2(*vecs[:,0][::-1]))
+
+    kwrg = {'facecolor':fc, 'edgecolor':ec, 'alpha':a, 'linewidth':lw}
+
+    # Width and height are "full" widths, not radius
+    for ele in nsig:
+        scale = np.sqrt(chi2.ppf(erf(ele / np.sqrt(2)), df=2))
+        width, height = 2 * scale * np.sqrt(vals)
+        ellip = Ellipse(xy=pos, width=width, height=height, angle=theta, **kwrg)
+
+        ax.add_artist(ellip)
+        ellip.set_clip_box(ax.bbox)
+
+
+def gaussfit_2d(X, C):
+	from numpy.linalg import inv, det
+	import corner
+	import emcee
+
+	# Joint LogLikelihood to maximize
+	def lnlike(theta, data, covar):
+		loc, lna, corr, lnc = theta[0:2], *theta[2:]
+		if -1 < corr < 1 and -10 < lna < 5 and -10 < lnc < 5:
+			b = corr * np.sqrt(np.exp(lna) * np.exp(lnc))
+			modC = covar + np.array([[np.exp(lna), b], [b, np.exp(lnc)]])
+			temp = [np.dot(loc - data[i], np.dot(inv(modC[i]), loc - data[i])) + np.log(det(modC[i])) for i in range(len(data))]
+			foo = - 0.5 * np.sum(temp, 0)
+			return foo
+		return -np.inf
+
+	nwalkers, ndim = 100, 5
+
+	init_cov = np.mean(C, 0)
+	init_params = list(np.mean(X, 0)) + [np.log(init_cov[0, 0]), 0.5, np.log(init_cov[1, 1])]
+	print('Using this initial guess:', init_params)
+
+	p0 = [init_params + 1e-4 * np.random.randn(5) for i in range(nwalkers)]
+
+	sampler = emcee.EnsembleSampler(nwalkers, 5, lnlike, args=(X, C))
+	sampler.run_mcmc(p0, 1000)
+
+	samples = sampler.chain[:, 500:, :].reshape(-1, 5)
+	return samples
+
 
 # Plotting composites 
 def plotcomp(infile):
@@ -45,8 +114,8 @@ def plotcomp(infile):
 		fig.savefig(infile+'.eps', rasterized=True)
 
 	except Exception as e:
-		print e.__doc__
-		print e.message
+		print(e.__doc__)
+		print(e.message)
 		os.chdir(prev_dir)
 
 	os.chdir(prev_dir)
@@ -85,7 +154,7 @@ def graphanize(infile, z_norm, label='test', approxfit=True, truefit=False, line
 	# plt.figure()
 	# plt.imshow(Corr, interpolation='None')
 
-	print 'Number of data-points are %d' %len(z)
+	print('Number of data-points are %d' %len(z))
 	# Plot the graph with errorbars
 	# plt.figure()
 	# plt.errorbar(z, m_Tau , np.sqrt(np.diag(Cov)), fmt='o', color=markercolor, label=label)
@@ -116,7 +185,7 @@ def graphanize(infile, z_norm, label='test', approxfit=True, truefit=False, line
 
 		l0 = min(np.ravel(CHI_COR)) # +2.30, +6.18 
 		min_chi = l0/(len(z) -2)
-		print 'chi-squared per dof = %.2f' %min_chi
+		print('chi-squared per dof = %.2f' %min_chi)
 	
 
 		#np.savetxt('chisq.dat', CHI_COR.T)
@@ -149,7 +218,7 @@ def plotchi(xbin, ybin, colors, label):
 		for j in ybin:
 			f = os.environ['OPT_COMPS'] + 'comp_V2_44_%d%d_equalz_tavg' %(i,j) 
 
-			print 'Going to directory %s' %f
+			print('Going to directory %s' %f)
 
 			try:
 				os.chdir(f)
@@ -167,8 +236,8 @@ def plotchi(xbin, ybin, colors, label):
 				# Do the contour plotting
 				finalchi += data
 			except Exception as e:
-				print e.__doc__
-				print e.message
+				print(e.__doc__)
+				print(e.message)
 				os.chdir(mydir)
 
 	#plt.figure()
@@ -201,3 +270,34 @@ def chisq_paris():
 	plt.contourf(X, Y, Z.T, [l0, l0 + 2.30], colors='r')
 	plt.contour(X, Y, Z.T, [l0, l0 + 6.18], colors='r')
 	plt.show()
+
+
+if __name__=="__main__":
+	np.random.seed()
+	mu_true = np.array([2., 4.])
+
+	N = 20
+
+	sig_x = 3 * np.random.uniform(size=N)
+	sig_y = 2 * np.random.uniform(size=N)
+	rho_xy = np.random.uniform(-1, 1, size=N)
+	sig_xy = rho_xy * sig_x * sig_y
+
+	X = np.zeros((N, 2))
+	covMat = np.zeros((N, 2, 2))
+
+	covSys = np.array([[2, 1], [1, 2]])
+
+	for j in range(N):
+		cov_intrinsic = np.array([[sig_x[j]**2, sig_xy[j]], [sig_xy[j], sig_y[j]**2]])
+		covMat[j] = cov_intrinsic
+		X[j] = np.random.multivariate_normal(mu_true, cov_intrinsic + covSys)
+
+
+	# fig, ax = plt.subplots(1)
+	# [plot_cov_ellipse(X[i], covMat[i], ax=ax) for i in range(N)]
+	# ax.set_xlim(mu_true[0] - 3 * sig_x.max(), mu_true[0] + 3 * sig_x.max())
+	# ax.set_ylim(mu_true[0] - 3 * sig_y.max(), mu_true[0] + 3 * sig_y.max())
+	# plt.show()
+
+	gaussfit_2d(X, covMat)

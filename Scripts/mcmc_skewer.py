@@ -1,10 +1,14 @@
 import scipy.optimize as op
 import numpy as np
+import importlib
 import emcee
 import matplotlib.pyplot as plt
 
 from getdist import plots, MCSamples
 from astroML.plotting.mcmc import convert_to_stdev
+import plotting
+
+importlib.reload(plotting)
 
 
 ## LIKELIHOOD DEFINATIONS
@@ -12,7 +16,7 @@ from astroML.plotting.mcmc import convert_to_stdev
 def lnlike1(theta, xi, yi, ei):
 	f0, t0, gamma, lss_sigma = theta
 	# Constant prior on tau_0 in log-space
-	if 0 <= f0 < 3 and -11 <= t0 < -2 and 1 <= gamma < 7 and 0 < lss_sigma < 0.6:
+	if 0 <= f0 < 3 and -14 <= t0 < 4 and -2 <= gamma < 9 and 0 < lss_sigma < 0.6:
 		model = f0 * np.exp(-np.exp(t0) * (1 + xi) ** gamma)
 		return -0.5 * np.sum((yi - model) ** 2 / (ei ** 2 + lss_sigma ** 2) + np.log(ei ** 2 + lss_sigma ** 2), 0)
 	return -np.inf
@@ -43,7 +47,8 @@ shift = np.array([-5.0625, 3.145])
 tilt = np.array([[-0.85627484,  0.51652047],
 						[ 0.51652047,  0.85627484]])
 
-x0, x1 = np.mgrid[-3:6:200j, -0.25:0.25:200j]
+#x0, x1 = np.mgrid[-3:6:200j, -0.25:0.25:200j]
+x0, x1 = np.mgrid[-7:10:200j, -0.25:0.25:200j]
 origPos = np.vstack([x0.ravel(), x1.ravel()])
 modPos = np.dot(np.linalg.inv(tilt), origPos).T + shift
 
@@ -120,7 +125,7 @@ def mcmcSkewer(bundleObj, logdef=1, niter=2500, do_mcmc=True, plotit=False, retu
 
 				# instantiate a getdist object 
 				MC = MCSamples(samples=samps, names=names, labels=labels, \
-					             ranges={'f0':(0, 3), 't0':(-11, -2), 'gamma':(1, 7), 'lss_sigma':(0, 0.6)})
+					             ranges={'f0':(0, 3), 't0':(-14, 4), 'gamma':(-2, 9), 'lss_sigma':(0, 0.6)})
 
 				# MODIFY THIS TO BE PRETTIER
 				if triangle:
@@ -184,11 +189,12 @@ def addLogs(fname, npix=200, s_list=None, getsys=False):
 	Returns:
 	    None
 	    """
+	import corner
 	import os
 	import time
 	import traceback
 	import subprocess
-	from ellipse_from_cov import plot_cov_ellipse
+	from plotting import plot_cov_ellipse
 
 	if not os.path.exists(fname):
 		print('Oops! There is no such folder')
@@ -238,7 +244,7 @@ def addLogs(fname, npix=200, s_list=None, getsys=False):
 		for i in range(len(suffix)):
 			CS = ax1.contour(x0, x1, convert_to_stdev(Ls[i]), levels=[0.683, ], linewidths=0.8, colors=(colors[i],))
 			CS.collections[0].set_label(suffix[i])
-		ax1.contour(x0, x1, convert_to_stdev(j_pdf), levels=[0.683, ], alpha=0.5, colors='k', linestyles='--')
+		ax1.contour(x0, x1, convert_to_stdev(j_pdf), levels=[0.683, 0.955], alpha=0.8, colors='k', linestyles='--')
 		plt.legend(loc = 'upper center', ncol=6)
 		plt.xlabel('$x_0$')
 		plt.ylabel('$x_1$')
@@ -251,27 +257,20 @@ def addLogs(fname, npix=200, s_list=None, getsys=False):
 			X = Ps[:, 0:2]
 			covMat = Ps[:, 2:].reshape(-1, 2, 2)
 
+
 			# this isn't much helpful as the contours are strongly correlated
 			#fig, ax2 = plt.subplots(1)
 			#[plot_cov_ellipse(X[i], covMat[i], nsig=[1, 2], ax=ax2) for i in range(len(X))]
-			[morph_gauss(X[i], covMat[i], ax=ax1) for i in range(len(X))]
+			[morph_gauss(X[i], covMat[i], ax=ax1, lw=0.6, a=0.6) for i in range(len(X))]
 
-			# initial guess for the fit
-			means_, cov_ = np.mean(X, 0), np.mean(covMat, 0)
-			init_ = list(means_) + list([np.log(cov_[0,0]), 0, np.log(cov_[1, 1])])
+			# Delegate this to another function
+			temp = plotting.gaussfit_2d(X, covMat)
+			fit_means = np.median(temp[:, 0:2], 0)
+			fit_cov = np.cov(temp[:, 0:2].T)
 
-			# I don't trust this method - check with MCMC
-			res = op.minimize(gauss_like, init_, args=(X, covMat))
-			print(res)
+			morph_gauss(fit_means, fit_cov, ax=ax1, fc='r', ls='dashed', lw=2) 
 
-			fit_mean = res['x'][0:2]
-			fit_a, fit_c = np.exp(res['x'][2]), np.exp(res['x'][4])
-			fit_b = res['x'][3] * np.sqrt(fit_a * fit_c)
-			fit_cov = np.array([[fit_a, fit_b], [fit_b, fit_c]])
-
-			print(cov_, '\n', fit_cov)
-			#morph_gauss(fit_mean, fit_cov, ax=ax1)
-
+			corner.corner(temp)
 	except:
 		traceback.print_exc()
 		os.chdir(currdir)
@@ -279,7 +278,7 @@ def addLogs(fname, npix=200, s_list=None, getsys=False):
 	os.chdir(currdir)
 
 
-def morph_gauss(pos, cov, ax=None, shift=shift, tilt=tilt):
+def morph_gauss(pos, cov, ax=None, shift=shift, tilt=tilt, fc='k', ec=[0,0,0], a=1, lw=2, ls='solid'):
 	from scipy.special import erf
 	from scipy.stats import chi2
 	import numpy as np
@@ -308,5 +307,5 @@ def morph_gauss(pos, cov, ax=None, shift=shift, tilt=tilt):
 	if ax is None:
 		fig, ax = plt.subplots()
 
-	ax.plot(modPos[0], modPos[1], '-k', lw=0.6)
+	ax.plot(modPos[0], modPos[1], lw=lw, alpha=a, color=fc, ls=ls)
 	plt.show()

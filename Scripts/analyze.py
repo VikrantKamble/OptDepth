@@ -9,12 +9,11 @@ from timeit import default_timer as timer
 #from scipy.special import erf
 from multiprocessing import Pool
 
-import calibrate
+from spec_corrections import calibrate
 import comp_create
 import mcmc_skewer
 
 imp.reload(comp_create)
-imp.reload(calibrate)
 imp.reload(mcmc_skewer)
 
 ly_line = 1215.67
@@ -157,6 +156,7 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
         start = timer()
 
         # Do not plot graphs while in parallel
+        res = None
         if parallel:
             print('Running in parallel now')
             pool = Pool()
@@ -168,12 +168,13 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
                 res = mcmc_skewer.mcmcSkewer([np.array([zMat[:,count], myspec[:,count], myivar[:,count]]).T, ele])
         else:
             res = mcmc_skewer.mcmcSkewer([np.array([zMat, myspec, myivar]).T, skewer_index], return_sampler=True, triangle=triangle, visualize=visualize, verbose=True)
-
         stop = timer()
         print('Time elapsed:', stop - start)
 
         os.chdir(currDir)
         return res
+
+        
 
 def transform(xprime):
     D = np.array([[-0.85627484,  0.51652047],[ 0.51652047,  0.85627484]])
