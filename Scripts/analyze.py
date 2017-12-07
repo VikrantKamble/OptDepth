@@ -44,6 +44,65 @@ def find_zbins(z, zstart=2.3):
     return np.array(curr_zbins)
 
 
+def hist_weights(p1, p2, z, zbins, n_chop=4):
+    n_zbins = len(zbins) - 1
+
+    # Left closed, right open partitioning
+    z0_bins = zbins
+    z0_bins[-1] += 0.001
+    z_ind = np.digitize(z, z0_bins)
+
+    chop1 = np.linspace(min(p1), max(p1), n_chop)
+    chop2 = np.linspace(min(p2), max(p2), n_chop)
+
+    # CREATING A 3D DATACUBE OF WEIGHTS
+    cube = np.zeros((n_zbins, n_chop - 1, n_chop - 1))
+
+    for i in range(n_zbins):
+        ind = (z >= zbins[i]) & (z < zbins[i + 1])
+        cube[i] = np.histogram2d(p1[ind], p2[ind], bins=(chop1, chop2))[0]
+
+    # Trim bins with no objects
+    # Outer - parameter; Inner - redshift
+    for i in range(n_chop - 1):
+        for j in range(n_chop - 1):
+            # Sets all bins to 0 if any one bin has no objects in it
+            if 0 in cube[:, i, j]:
+                cube[:, i, j] = 0
+
+    cube_sum = np.sum(cube, axis=0)
+
+    # A. NORMALIZED WEIGHTS ACROSS ALL REDSHIFTS
+    p0_bins, p1_bins = chop1, chop2
+
+    p0_bins[-1] += 0.001  # <-- Required since histogram2d and digitize have different
+    p1_bins[-1] += 0.001  # binning scheme
+
+    foo = np.digitize(p1, p0_bins)
+    blah = np.digitize(p2, p1_bins)
+
+    weight_mat = cube_sum / cube
+    weight_mat[np.isnan(weight_mat)] = 0
+
+    # To obtain consistent weights across all redshifts
+    weight_mat = weight_mat / np.linalg.norm(weight_mat, axis=(1, 2))[:, None, None]
+
+    # Final histogram weights to be applied
+    h_weights = weight_mat[z_ind - 1, foo - 1, blah - 1]
+
+    """
+    #To verify that the histogram rebinning has been done correctly
+    for i in range(n_zbins):
+        ind = (z >= zbins[i]) & (z < zbins[i + 1])
+        plt.figure()
+        plt.hist2d(p1[ind], p2[ind], bins=(chop1, chop2), weights=h_weights[ind], normed=True)[0]
+        plt.colorbar()
+    plt.show()
+    """
+
+    return h_weights
+
+
 def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, distort=True, histbin=False, statistic='mean', frange=[1060, 1170], cutoff=4000, suffix='temp', overwrite=True, skewer_index=-1, parallel=False, triangle=False, visualize=False, verbose=False):
 
     """
@@ -72,7 +131,8 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
     outfile = 'comp_' + suffix
 
     myspec, myivar = qso.flux[cut], qso.ivar[cut]
-    myz, myp, myalpha = qso.zq[cut], np.array([qso.p1[cut], qso.p2[cut]]), qso.alpha[cut]
+    myz, myp1, myp2, myalpha = qso.zq[cut], qso.p1[cut], qso.p2[cut], qso.alpha[cut]
+
     print('Total number of spectra after selection cuts: %d' %len(myspec))
 
     # B. DATA PREPROCESSING -------------------------------------------------------------
@@ -96,6 +156,20 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
         myivar *= corrections
 
         myivar[mask] = 0
+        print('All spectra corrected for flux calibration errors')
+
+    if histbin:
+        myzbins = find_zbins(myz)
+        hInd = np.where((myz >= myzbins[0]) & (myz < myzbins[-1]))
+
+        myp1, myp2, myz, myalpha = myp1[hInd], myp2[hInd], myz[hInd], myalpha[hInd]
+        myspec, myivar = myspec[hInd], myivar[hInd]
+
+        lObs = lObs[hInd]
+        zMat = zMat[hInd]
+
+        h_weights = hist_weights(myp1, myp2, myz, myzbins)
+        myivar = myivar * h_weights[:, None]
 
     if rpix:
         outfile += '_rpix'
@@ -105,6 +179,7 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
     if distort:
         outfile += '_distort'
         CenAlpha = np.median(myalpha)
+        #CenAlpha = -1.8
         distortMat = np.array([(qso.wl / 1450.) ** ele for ele in (CenAlpha - myalpha)])
         myspec *= distortMat
         myivar /= distortMat ** 2

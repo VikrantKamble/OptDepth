@@ -73,7 +73,7 @@ def mcmcSkewer(bundleObj, logdef=1, niter=2500, do_mcmc=True, plotit=False, retu
 	print('Carrying analysis for skewer', bundleObj[1])
 	z, f, ivar = bundleObj[0].T
 
-	ind = ivar > 0
+	ind = (ivar > 0) & (np.isfinite(f))
 	z, f, sigma = z[ind], f[ind], 1.0 / np.sqrt(ivar[ind])
 
 
