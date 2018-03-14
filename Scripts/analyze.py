@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 
 from scipy.interpolate import interp1d
 from timeit import default_timer as timer
-#from scipy.special import erf
 from multiprocessing import Pool
 
 from spec_corrections import calibrate
@@ -102,8 +101,18 @@ def hist_weights(p1, p2, z, zbins, n_chop=4):
 
     return h_weights
 
+# dictionary to hold the bin ranges
+myDict = {
+    'one': [[-2.8, -2.13], [20, 40]],
+    'two': [[-2.8, -2.13], [40, 60]],
+    'three': [[-2.13, -1.46], [20, 33.3]],
+    'four': [[-2.13, -1.46], [33.3, 46.6]],
+    'five': [[-2.13, -1.46], [46.6, 60]],
+    'six': [[-1.46, -0.8], [20, 40]],
+    'seven': [[-1.46, -0.8], [40, 60]] 
+}
 
-def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, distort=True, histbin=False, statistic='mean', frange=[1060, 1170], cutoff=4000, suffix='temp', overwrite=True, skewer_index=-1, parallel=False, triangle=False, visualize=False, verbose=False):
+def analyze(qso, nbin, snt=[2, 50], task='composite', rpix=True, calib=False, distort=True, histbin=False, statistic='mean', frange=[1060, 1170], cutoff=[4000, 8000], suffix='temp', overwrite=True, skewer_index=[-1], parallel=False, **kwargs):
 
     """
     Creates composites using a given parameter settings as below
@@ -126,9 +135,10 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
     """
 
     # A. DATA ACQUISITION AND TRIMMING --------------------------------------------------
+    pSel = myDict[nbin]
     cut = np.where((qso.sn > snt[0]) & (qso.sn < snt[1])  & (qso.p1 > pSel[0][0]) & (qso.p1 <= pSel[0][1]) & (qso.p2 > pSel[1][0]) & (qso.p2 <= pSel[1][1]))[0]
     
-    outfile = 'comp_' + suffix
+    outfile = 'comp_' + suffix + '_'
 
     myspec, myivar = qso.flux[cut], qso.ivar[cut]
     myz, myp1, myp2, myalpha = qso.zq[cut], qso.p1[cut], qso.p2[cut], qso.alpha[cut]
@@ -136,9 +146,6 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
     print('Total number of spectra after selection cuts: %d' %len(myspec))
 
     # B. DATA PREPROCESSING -------------------------------------------------------------
-    # 1. Calibrate the flux vector
-    # if calib:   # DO SOMEHTING HERE
-
     # The observer wavelengths and redshifts
     lObs = np.array((np.mat(qso.wl).T * np.mat(1 + myz))).T
     zMat = lObs / ly_line - 1
@@ -153,7 +160,7 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
 
         corrections = f(lObs)
         myspec /= corrections
-        myivar *= corrections
+        myivar *= corrections # <--- mistake
 
         myivar[mask] = 0
         print('All spectra corrected for flux calibration errors')
@@ -172,24 +179,27 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
         myivar = myivar * h_weights[:, None]
 
     if rpix:
+        """ Restrict wavelength coverage in observer frame """
         outfile += '_rpix'
-        myivar[lObs < cutoff] = 0
+        myivar[(lObs < cutoff[0]) | (lObs > cutoff[1])] = 0
 
     # 4. Distort spectra to remove power-law variations
     if distort:
         outfile += '_distort'
+        
         CenAlpha = np.median(myalpha)
         #CenAlpha = -1.8
         distortMat = np.array([(qso.wl / 1450.) ** ele for ele in (CenAlpha - myalpha)])
+        
         myspec *= distortMat
         myivar /= distortMat ** 2
+        
         print('All spectra distorted to alpha:', CenAlpha)
 
     # C. CALIBRATION VS ESTIMATION ------------------------------------------------------
     if task == 'calibrate':
         Lind = (myz > 1.6) & (myz < 4)
         print('Number of spectra used for calibration are: %d' %Lind.sum())
-        #rest_range = [[1350, 1360], [1450, 1500]]
         rest_range = [[1280,1290],[1320,1330],[1345,1360],[1440,1480]]
         # normalization range used
         obs_min, obs_max = 4680, 4720 
@@ -242,18 +252,13 @@ def analyze(qso, pSel, snt=[2, 50], task='composite', rpix=True, calib=False, di
             for count, ele in enumerate(skewer_index):
                 res = mcmc_skewer.mcmcSkewer([np.array([zMat[:,count], myspec[:,count], myivar[:,count]]).T, ele])
         else:
-            res = mcmc_skewer.mcmcSkewer([np.array([zMat, myspec, myivar]).T, skewer_index], return_sampler=True, triangle=triangle, visualize=visualize, verbose=True)
+            
+            res = mcmc_skewer.mcmcSkewer([np.array([zMat, myspec, myivar]).T, skewer_index], **kwargs)
+            #return zMat, myspec, myivar
         stop = timer()
         print('Time elapsed:', stop - start)
 
         os.chdir(currDir)
         return res
-
-        
-
-def transform(xprime):
-    D = np.array([[-0.85627484,  0.51652047],[ 0.51652047,  0.85627484]])
-    modPos = np.dot(np.linalg.inv(D), xprime).T + np.array([-5.0625, 3.145])
-    print(modPos)
 
 # EOF

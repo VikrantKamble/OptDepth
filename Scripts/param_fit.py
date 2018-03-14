@@ -10,75 +10,85 @@ Thin disc approximation gives alpha_nu = 1/3
 import numpy as np
 import traceback
 from scipy import optimize as op
+from scipy.optimize import curve_fit
+from astropy.convolution import convolve, Box1DKernel
+from scipy.integrate import quad
+
 import matplotlib.pyplot as plt
 
-def fit_alpha(S, zq, plotit = False, wav_range = [[1280, 1290], [1315, 1325], [1350, 1360], [1440, 1470]]):
+wl  = 10 ** (2.73 + np.arange(8140) * 10 ** -4)
+alpha_fit_ranges = [[1280, 1290], [1315, 1325], [1350, 1360], [1440, 1470]]
+
+def fit_alpha(flux, ivar, redshift=-1, wl=wl, wav_range=alpha_fit_ranges, plotit=False):
     """ Estimate the spectral index 
 
-    Parameters:
-    -----------------------------------
-    S: a container with wave, flux, inverse variance as its elements
-    zq: the redshift of the object
-    plotit: a flag to indicate if to plot
+    Parameters -- 
+    flux     : flux vector 
+    ivar     : precision vector
+    redshift : redshift of the object (optional), used only while plotting
+    wl       : wavelength vector 
     wav_range: the wavelength chunks over which to perform fitting
+    plotit   : a flag to indicate if to plot
 
-    Returns:
-    -----------------------------------
-    [normalization constant, spectral_index], reduced chi-square, error on spectral index
+    Returns --
+    normalization constant, spectral_index, reduced chi-square, error on spectral index
 
-    Throws:
-    -----------------------------------
+    Throws --
     ValueError if precision loss
     RuntimeError if number of function evaluations are exceeded
     """
     def alpha_func(x, theta):
-    return theta[0] * (x/1450.) ** theta[1]
+        return theta[0] * (x/1450.) ** theta[1]
 
     def mychisq(theta, X, y, yivar):
-    model = alpha_func(X, theta)
-    return 0.5 * np.sum(yivar * (y - model) ** 2)
-
-    wl, flux, ivar = *S
-    redshift = zq
+        model = alpha_func(X, theta)
+        return 0.5 * np.sum(yivar * (y - model) ** 2)
 
     # Wavelength chucks used for fitting
     wInd = np.array([])
     for w in range(len(wav_range)):
         wTemp = np.where((wl > wav_range[w][0]) & (wl < wav_range[w][1]))[0]
-        wInd = np.concatenate((wInd, wTemp))
+        mask = ivar[wTemp] > 0
+        # Do analysis only if 20 pixels in each chunck available
+        if mask.sum() < 20:
+            return np.nan, np.nan, -1, np.nan
+        wInd = np.concatenate((wInd, wTemp[mask]))
     wave = wl[wInd.astype(int)]
 
     spectra, invvar = flux[wInd.astype(int)], ivar[wInd.astype(int)]
-   
-    l_wave, l_spec, l_ivar = wave, spectra, invvar  # Changes on each iteration
+
+    # Changes on each iteration
+    l_wave, l_spec, l_ivar = wave, spectra, invvar
     try:
         chisq_r0 = np.inf
 
-        # fit iteratively removing points that are less than 
-        # 3 sigma of the fit in each iteration
+        # fit iteratively removing points that are less than 3 sigma
         for k in range(3):
-            result = op.minimize(mychisq, [1, -1], args=(l_wave, l_spec, l_ivar));
+            result = op.minimize(mychisq, [np.mean(l_spec), -1], args=(l_wave, l_spec, l_ivar), method='Nelder-Mead');
             chisq_r = result['fun']/(len(l_spec) - 2)
 
             if chisq_r < chisq_r0:
                 chisq_r0 = chisq_r
 
-                # Remove 3 sigma one-sided points
                 outlier = np.sqrt(invvar) * (spectra - alpha_func(wave, result['x']))  > -3
                 l_wave, l_spec, l_ivar = wave[outlier], spectra[outlier], invvar[outlier]
             else:
                 break
+                
         if result['success'] == True:
-            # using the asymptotic hessian-inverse provided by the fitting routine
-            # as a proxy for the error on the spectral index
-            alpha_sig = np.sqrt(result['hess_inv'][1, 1])
+            # using the analytic hessian
+            temp = - np.sum(l_ivar * (np.log(l_wave / 1450.) ** 2 * 
+                alpha_func(l_wave, result['x']) * (l_spec - 2 * alpha_func(l_wave, result['x'])
+                    )))
+            alpha_sig = 1. / np.sqrt(temp)
         else:
             raise ValueError
         
         if plotit :
             plt.figure(figsize=(15, 6))
             plt.plot(wl, flux, linewidth=0.4, color='k', label=r'$z = %.2f$' %redshift)
-            plt.plot(wl, alpha_func(wl, result['x']), lw=0.4, color='r', label=r'$\alpha = %.2f, \chi^2_r = %.2f$' %(result['x'][1], 2 * chisq_r))
+            plt.plot(wl, alpha_func(wl, result['x']), lw=0.4, color='r', 
+                label=r'$\alpha = %.2f, \chi^2_r = %.2f, \sigma_\alpha = %.2f$' %(result['x'][1], 2 * chisq_r, alpha_sig))
             plt.xlim(1040, 1800)
             plt.ylim(np.percentile(flux, 1), np.percentile(flux, 99))
             plt.legend()
@@ -86,11 +96,11 @@ def fit_alpha(S, zq, plotit = False, wav_range = [[1280, 1290], [1315, 1325], [1
             plt.plot(l_wave, l_spec, '*')
             plt.show()
             
-        return result['x'], 2 * chisq_r, alpha_sig
+        return result['x'][0], result['x'][1], 2 * chisq_r, alpha_sig
 
     except:
         traceback.print_exc()
-        return [0, 0], -1, 0
+        return np.nan, np.nan, -1, np.nan
 
 
 # linear fit to the continuum
@@ -112,23 +122,17 @@ def mychisq(theta, X, y, yinv):
     return np.sum(yinv * (y - model) ** 2, axis=0)
 
 
-def fit_EW(S, zq, plotit = False, lin_range=np.array([[1450, 1465], [1685, 1700]]), gauss_range=np.array([1500, 1580])):
+def fit_EW(flux, ivar, redshift=-1, wl=wl, plotit=False, lin_range=np.array([[1450, 1465], [1685, 1700]]), gauss_range=np.array([1500, 1580])):
     """ Fits a double gaussian profile to CIV line 
 
-    Parameters:
-    -----------------------------------
-    S: a container with wavelength, flux and inverse variance as its elements
-    zq: the redshift of the object
-    plotit: a flag to toggle plotting
+    Parameters --
+    zq: the redshift of the object m
     lin_range: wavelength ranges over which to fit the local continuum
     gauss_range: wavelength range for the line fitting
 
-    Returns:
-    -----------------------------------
+    Returns --
     equivalent width, fwhm, linear_fit params, gauss_fit params, reduced chi-square
     """
-    wl, flux, invvar, redshift = *S, zq
-
     plotInd = np.where((wl > 1400) & (wl < 1700))[0]
     wave, spectra, error = np.array([]), np.array([]), np.array([])
 
@@ -140,15 +144,18 @@ def fit_EW(S, zq, plotit = False, lin_range=np.array([[1450, 1465], [1685, 1700]
 
         wave = np.hstack((wave, wl[foo][blah]))
         spectra = np.hstack((spectra, flux[foo][blah]))
-        error = np.hstack((error, 1.0/np.sqrt(invvar[foo][blah])))
+        error = np.hstack((error, 1.0/np.sqrt(ivar[foo][blah])))
 
+    # select pixels that provide information
+        indices = np.isfinite(error)
+        wave, spectra, error = wave[indices], spectra[indices], error[indices]
     try:
         popt, pcov = curve_fit(lin_funct, wave, spectra, sigma=error)
 
         # Double Gaussian Fit
         ind = np.where((wl > gauss_range[0]) & (wl < gauss_range[1]))
 
-        l_wave, l_ivar = wl[ind], invvar[ind]
+        l_wave, l_ivar = wl[ind], ivar[ind]
         l_spec = flux[ind] - lin_funct(l_wave, popt[0], popt[1])
 
         # Select point that provide information
@@ -205,29 +212,41 @@ def fit_EW(S, zq, plotit = False, lin_range=np.array([[1450, 1465], [1685, 1700]
             plt.figure()
             plt.plot(wl[plotInd], flux[plotInd], alpha=0.6, color='gray', label=r'$z = %.2f$' %redshift)
             plt.plot(wl[plotInd], lin_funct(wl[plotInd], popt[0], popt[1]) + gauss_funct(wl[plotInd], *p0), color='r', label=r'$EW = %.2f, FWHM = %.2f, \chi^2_r = %.2f$' %(ew, fwhm, chisq_r0))
-            plt.legend(loc = 'lower right')
+            
 
-            plt.plot(wl[plotInd], lin_funct(wl[plotInd], popt[0], popt[1]) + p0[0] * np.exp(-(wl[plotInd] - p0[4])**2 / (2 * p0[2] ** 2)), color='g')
-            plt.plot(wl[plotInd], lin_funct(wl[plotInd], popt[0], popt[1]) + p0[1] * np.exp(-(wl[plotInd] - p0[5])**2 / (2 * p0[3] ** 2)), color='b')
+            plt.plot(wl[plotInd], lin_funct(wl[plotInd], popt[0], popt[1]) + p0[0] * np.exp(-(wl[plotInd] - p0[4])**2 / (2 * p0[2] ** 2)), color='g', label='component 1')
+            plt.plot(wl[plotInd], lin_funct(wl[plotInd], popt[0], popt[1]) + p0[1] * np.exp(-(wl[plotInd] - p0[5])**2 / (2 * p0[3] ** 2)), color='b', label='component 2')
 
             plt.axvline(r_loc, color='k')
             plt.axvline(b_loc, color='k')
             plt.axvline(loc, color='k')
             plt.axvline(1549.48, linestyle='dashed', color='k')
+            plt.legend(loc = 'lower right')
             plt.show()
 
         return ew, fwhm, popt, p_init, chisq_r0
 
     except(RuntimeError, ValueError, TypeError):
+        traceback.print_exc()
         return -1, -1,  np.zeros(2), np.zeros(6), -1
 
 # Local implementation to find CIV line parameters for the full sample using mp library
-def process_all(spec, ivar, z):
-     from multiprocessing import Pool
+def _g(theta):
+    return fit_alpha(*theta)
+def _h(theta):
+    return fit_EW(*theta)
 
-     pool = Pool()
-     res = pool.map(fit_EW, zip(spec, ivar, z), chunksize=5)
+def process_all(spec, ivar, z, param='alpha'):
+    from multiprocessing import Pool
 
-     pool.close()
-     pool.join()
-     return res
+    pool = Pool()
+    if param == 'alpha':
+        res = pool.map(_g, zip(spec, ivar, z), chunksize=5)
+    elif param == 'EW':
+        res = pool.map(_h, zip(spec, ivar, z), chunksize=5)
+    else:
+        pass
+
+    pool.close()
+    pool.join()
+    return np.asarray(res)
