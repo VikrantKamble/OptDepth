@@ -8,23 +8,29 @@ from multiprocessing import Pool
 from functools import partial
 
 import corrections
-import comp_create
+import comp_simple
+import get_comp
 import mcmc_skewer
 
-imp.reload(comp_create)
+imp.reload(comp_simple)
 imp.reload(mcmc_skewer)
 imp.reload(corrections)
+imp.reload(get_comp)
 
 
-def find_zbins(z, zstart=2.3):
+def find_zbins(z, zstart=2.1, deltaz=0.2):
+    """ Create bins in quasar redshifts with a given minimum
+    number of objects in each bin.
+    * Use this in conjuction with the composite creation code
+    """
     curr_zbins = [zstart]
     curr_z = zstart
 
     while True:
-        pos = np.where((z > curr_z) & (z <= curr_z + 0.12))[0]
+        pos = np.where((z > curr_z) & (z <= curr_z + 0.2))[0]
 
         if len(pos) > 50:
-            curr_z += 0.12
+            curr_z += 0.2
             curr_zbins.append(curr_z)
         else:
             pos = np.where((z > curr_z) & (z <= curr_z + 0.18))[0]
@@ -41,7 +47,19 @@ def find_zbins(z, zstart=2.3):
     return np.array(curr_zbins)
 
 
-def hist_weights(p1, p2, z, zbins, n_chop=4):
+def hist_weights(p1, p2, z, zbins, n_chop=4, truncated=True):
+    """ Function to get the appropriate weights, such that
+    quasars i n different bins all have the same probability
+    distribution in different redshift bins
+
+    * This assumes that the redshifts z have been properly
+    truncated to be in the zbins range.
+    """
+    if not truncated:
+        ixs = (z >= zbins[0]) & (z < zbins[-1])
+        z = z[ixs]
+        p1, p2 = p1[ixs], p2[ixs]
+
     n_zbins = len(zbins) - 1
 
     # Left closed, right open partitioning
@@ -73,6 +91,7 @@ def hist_weights(p1, p2, z, zbins, n_chop=4):
     p0_bins, p1_bins = chop1, chop2
 
     # <-- Required since histogram2d and digitize have different
+    # binning schemes
     p0_bins[-1] += 0.001
     p1_bins[-1] += 0.001
 
@@ -83,13 +102,13 @@ def hist_weights(p1, p2, z, zbins, n_chop=4):
     weight_mat[np.isnan(weight_mat)] = 0
 
     # To obtain consistent weights across all redshifts
-    weight_mat = weight_mat / np.linalg.norm(weight_mat, axis=(1, 2))[:, None, None]
+    weight_mat /= np.linalg.norm(weight_mat, axis=(1, 2))[:, None, None]
 
     # Final histogram weights to be applied
     h_weights = weight_mat[z_ind - 1, foo - 1, blah - 1]
 
     """
-    #To verify that the histogram rebinning has been done correctly
+    # To verify that the histogram rebinning has been done correctly
     for i in range(n_zbins):
         ind = (z >= zbins[i]) & (z < zbins[i + 1])
         plt.figure()
@@ -97,15 +116,14 @@ def hist_weights(p1, p2, z, zbins, n_chop=4):
         plt.colorbar()
     plt.show()
     """
-
     return h_weights
 
 
-def analyze(binObj, task='skewer', rpix=True, distort=True, CenAlpha=None,
+def analyze(binObj, task='skewer', rpix=False, distort=True, CenAlpha=None,
             histbin=False, statistic='mean', frange=[1070, 1160],
             cutoff=[3700, 8000], suffix='temp', overwrite=False,
-            skewer_index=[-1], parallel=False, calib_kwargs=None,
-            skewer_kwargs={}):
+            skewer_index=[-1], zq_cut=[0, 5], parallel=False,
+            calib_kwargs=None, skewer_kwargs={}):
 
     outfile = task + '_' + suffix
 
@@ -127,21 +145,28 @@ def analyze(binObj, task='skewer', rpix=True, distort=True, CenAlpha=None,
 
     myz, myalpha = binObj._zq, binObj._alpha
 
+    # selecting according to quasar redshifts
+    zq_mask = (myz > zq_cut[0]) & (myz < zq_cut[1])
+
+    myspec = myspec[zq_mask]
+    myivar = myivar[zq_mask]
+    zMat = zMat[zq_mask]
+    myz, myalpha = myz[zq_mask], myalpha[zq_mask]
+
     # B. DATA PREPROCESSING ---------------------------------------------------
     if histbin:
-        """
-            Histogram binning in parameter space
-        """
+        """ Histogram binning in parameter space """
         myp1, myp2 = binObj._par1, binObj._par2
 
         myzbins = find_zbins(myz)
         hInd = np.where((myz >= myzbins[0]) & (myz < myzbins[-1]))
 
+        # Modify the selection to choose only objects that fall in the
+        # zbins range
         myz, myalpha = myz[hInd], myalpha[hInd]
         myp1, myp2 = myp1[hInd], myp2[hInd]
 
         myspec, myivar = myspec[hInd], myivar[hInd]
-
         zMat = zMat[hInd]
 
         if binObj._hWeights is None:
@@ -159,11 +184,10 @@ def analyze(binObj, task='skewer', rpix=True, distort=True, CenAlpha=None,
         outfile += '_rpix'
         cutoff = np.array(cutoff) / 1215.67 - 1
         myivar[(zMat < cutoff[0]) | (zMat > cutoff[1])] = 0
+        print('Pixels masked in the observer range', cutoff)
 
     if distort:
-        """
-            Distort spectra in alpha space
-        """
+        """ Distort spectra in alpha space """
         outfile += '_distort'
 
         if CenAlpha is None:
@@ -186,7 +210,7 @@ def analyze(binObj, task='skewer', rpix=True, distort=True, CenAlpha=None,
         obs_min, obs_max = 4600, 4640
 
         corrections.calibrate(binObj.wl, myspec[Lind], myivar[Lind], myz[Lind],
-                              rest_range, obs_min, obs_max, **calib_kwargs)
+                              rest_range, obs_min, obs_max, binObj.name, True)
 
     # D. COMPOSITE CREATION IF SPECIFIED --------------------------------------
     if task == 'composite':
@@ -194,9 +218,14 @@ def analyze(binObj, task='skewer', rpix=True, distort=True, CenAlpha=None,
             Create composites using the spectra
             Update the composite code in light of new changes here
         """
-        zbins = find_zbins(myz)
-        comp_create.compcompute(myspec, myivar, myz, mywave, [myp1, myp2],
-                                zbins, [5, 5], histbin, statistic, outfile)
+        # zbins = find_zbins(myz)
+        zbins = np.arange(2.1, 4.5, 0.2)
+        comp_simple.compcompute(myspec, myivar, myz, mywave,
+                                zbins, statistic, outfile)
+
+    if task == 'binned':
+        mu, sig = get_comp.get_comp(myspec, myivar, zMat, binObj.wl, frange=frange)
+        return mu, sig
 
     # E. LIKELIHOOD SKEWER ----------------------------------------------------
     if task == 'skewer':
@@ -229,7 +258,8 @@ def analyze(binObj, task='skewer', rpix=True, distort=True, CenAlpha=None,
         elif len(skewer_index) > 1:
             for count, ele in enumerate(skewer_index):
                 res = mcmc_skewer.mcmcSkewer(
-                    [np.array([zMat[:, count], myspec[:, count], myivar[:, count]]).T, ele])
+                    [np.array([zMat[:, count], myspec[:, count], myivar[:, count]]).T, ele],
+                    **skewer_kwargs)
         else:
             res = mcmc_skewer.mcmcSkewer(
                 [np.array([zMat, myspec, myivar]).T, skewer_index[0]], **skewer_kwargs)
@@ -238,4 +268,49 @@ def analyze(binObj, task='skewer', rpix=True, distort=True, CenAlpha=None,
         print('Time elapsed:', stop - start)
 
         os.chdir(currDir)
-        return res
+        return mywave, res
+
+
+def reconstruct(bin, tau_mean, tau_cov, niter=100, frange=[1070, 1160],
+                b_kwargs={}):
+    """
+    Create functional pdf of reconstructed continuum using a
+    pdf on optical depth parameters
+
+    Parameters:
+    ----------
+    bin      : the binObj on which to apply the function
+    tau_mean : location of optical depth params
+    tau_cov  : their covariance matrix
+    niter    : number of continuum evaluations following the pdf
+
+    Returns:
+    ---------
+    A 2D array of size niter * n_forest_pixels
+    """
+    # Wavelength to return for plotting
+    ixs = (bin.wl > frange[0]) & (bin.wl < frange[1])
+
+    # Sample points from the Gaussian pdf
+    if tau_cov is None:
+        ln_tau0, gamma = tau_mean[:, None]
+        niter = 1
+    else:
+        ln_tau0, gamma = np.random.multivariate_normal(tau_mean,
+                                                       tau_cov, size=niter).T
+    tau0 = np.exp(ln_tau0)
+
+    # Create 2d array to store the result
+    wl = 10 ** (2.73 + np.arange(8140) * 10 ** -4)
+    ixs = (wl > frange[0]) & (wl < frange[1])
+
+    data = np.zeros((niter, ixs.sum()))
+
+    # Loop through and aggregate the results
+    for i in range(niter):
+        s_kwargs = {'logdef': 4, 'truths':  [tau0[i], gamma[i]]}
+
+        __, data[i] = analyze(bin, parallel=True, frange=frange,
+                              skewer_index='all', skewer_kwargs=s_kwargs,
+                              **b_kwargs)
+    return bin.wl[ixs], data

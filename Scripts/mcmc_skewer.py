@@ -1,19 +1,57 @@
-from scipy.optimize import minimize
 import numpy as np
-import importlib
 import emcee
 import matplotlib.pyplot as plt
 
+from scipy.optimize import minimize
+from scipy.stats import binned_statistic
 from getdist import plots, MCSamples
 from astroML.plotting.mcmc import convert_to_stdev as cts
-import plotting
 
-importlib.reload(plotting)
+from plotting import marg_estimates
+
+# global parameters
+binx = np.arange(2.0, 4.61, 0.05)
+centers = (binx[1:] + binx[:-1]) / 2.
+
+
+def xfm(pos, shift, tilt, dir='down'):
+    """
+    Perform conversion from one system to another
+
+    dir : direction to do the transform
+        up : orig to mod
+        down(default) : mod to orig
+    """
+    if np.array(pos).ndim == 1:
+        pos = np.array(pos)[None, :]
+    if dir == 'up':
+        return np.dot((pos - shift), tilt.T)
+    elif dir == 'down':
+        return np.dot(np.linalg.inv(tilt), pos.T).T + shift
+
+
+# function to return std deviation using bootstrapping
+def sig_func(a, threshold=20, nboot=200):
+    if len(a) < threshold:
+        return -1
+    else:
+        a_boot = np.random.choice(a, replace=True, size=(nboot, len(a)))
+        return np.std(np.mean(a_boot, axis=1))
 
 
 # LIKELIHOOD DEFINATIONS
+def simpleln(theta, xi, yi, ei):
+    """ Simple chisquare model with only measurement
+    uncertainties """
+    f0, t0, gamma = theta
+    if 0 <= f0 < 3 and -14 <= t0 < 4 and -2 <= gamma < 9:
+        model = f0 * np.exp(-np.exp(t0) * (1 + xi) ** gamma)
+        return -0.5 * np.sum((yi - model) ** 2 / ei ** 2)
+    return -np.inf
+
+
 def lnlike1(theta, xi, yi, ei):
-    """ Model with constant LSS variance across redshift"""
+    """ Model with constant LSS variance across redshift """
     f0, t0, gamma, sigma = theta
     # Constant prior on tau_0 in log-space
     if 0 <= f0 < 3 and -14 <= t0 < 4 and -2 <= gamma < 9 and 0 < sigma < 0.6:
@@ -63,8 +101,7 @@ def outer(tau0, gamma):
             model = f0 * np.exp(-tau0 * (1 + xi) ** gamma)
 
             # Model for LSS variance
-            var = 0.065 * ((1 + xi)/3.25) ** 3.8 * model ** 2
-
+            var = 0.065 * ((1 + xi) / 3.25) ** 3.8 * model ** 2
             return -0.5 * np.sum((yi - model) ** 2 / (ei ** 2 + var) +
                                  np.log(ei ** 2 + var))
         return -np.inf
@@ -79,6 +116,7 @@ guess2 = [1.5, -8, 6, 0.065, 3.8]
 guess3 = [1.5, -6, 3.8]
 
 # function defination for scipy optimize
+lsq = lambda *args: -simpleln(*args)
 chisq1 = lambda *args: -lnlike1(*args)
 chisq2 = lambda *args: -lnlike2(*args)
 chisq3 = lambda *args: -lnlike3(*args)
@@ -99,53 +137,68 @@ labels3 = ["f_0", r"\tau_0", "\gamma"]
 kranges3 = {'f0': (0, 3), 't0': (-14, 4), 'gamma': (-2, 9)}
 
 # Create a grid - delegate this to the inputs of this function
-shift = np.array([-5.0625, 3.145])
-tilt = np.array([[-0.85627484,  0.51652047],
-                [0.51652047,  0.85627484]])
+shift = np.array([-5.27, 3.21])
+tilt = np.array([[-0.8563,  0.5165], [0.5165,  0.8563]])
 
+# x0, x1 = np.mgrid[-1:2:200j, -0.18:0.02:200j]
 x0, x1 = np.mgrid[-7:10:200j, -0.25:0.25:200j]
 
+# Changed this
 x0_line = np.linspace(-7, 10, 200)
 x1_line = np.linspace(-0.25, 0.25, 200)
+
+# x0_line = np.linspace(-1, 2, 200)
+# x1_line = np.linspace(-0.18, 0.02, 200)
 
 origPos = np.vstack([x0.ravel(), x1.ravel()])
 modPos = np.dot(np.linalg.inv(tilt), origPos).T + shift
 
 
-def mcmcSkewer(bundleObj, logdef=3, niter=2500, do_mcmc=True, plotit=False,
-               return_sampler=False, triangle=False, evalgrid=True,
-               visualize=False, VERBOSITY=False, seed=None, true=[0.002, 3.8]):
+def mcmcSkewer(bundleObj, logdef=3, binned=False, niter=2500, do_mcmc=True,
+               return_sampler=False,
+               evalgrid=True, in_axes=None, viz=False, VERBOSITY=False,
+               seed=None, truths=[0.002, 3.8]):
     """
     Script to fit simple flux model on each restframe wavelength skewer
 
     Parameters:
-        bundleObj: A list of [z, f, ivar] with the skewer_index
-        logdef: Which model to use
-        niter: The number of iterations to run the mcmc (500 for burn-in fixed)
-        do_mcmc: Flag whether to perform mcmc
-        plotit: Plot the data along with best fit from scipy and mcmc
-        return_sampler: Whether to return the raw sampler  without flatchaining
-        triangle: Display triangle plot of the parameters
-        evalgrid: Whether to compute loglikelihood on a specified grid
+    -----------
+        bundleObj : A list of [z, f, ivar] with the skewer_index
+        logdef : Which model to use
+        niter : The number of iterations to run the mcmc (40% for burn-in)
+        do_mcmc : Flag whether to perform mcmc
+        plt_pts : Plot the data along with best fit from scipy and mcmc
+        return_sampler : Whether to return the raw sampler  without flatchaining
+        triangle : Display triangle plot of the parameters
+        evalgrid : Whether to compute loglikelihood on a specified grid
+        in_axes : axes over which to draw the plots
+        xx_viz : draw marginalized contour in modifed space
+        VERBOSITY : print extra information
+        seed : how to seed the random state
+        truths : used with logdef=4, best-fit values of tau0 and gamma
 
     Returns:
         mcmc_chains if return_sampler, else None
     """
-    print('Carrying analysis for skewer', bundleObj[1])
+
     z, f, ivar = bundleObj[0].T
 
     ind = (ivar > 0) & (np.isfinite(f))
     z, f, sigma = z[ind], f[ind], 1.0 / np.sqrt(ivar[ind])
-
     # -------------------------------------------------------------------------
+    # continuum flux estimate given a value of (tau0, gamma)
     if logdef == 4:
-        chisq4 = lambda *args: -outer(*true)(*args)
+        if VERBOSITY:
+            print('Continuum estimates using optical depth parameters:', truths)
+        chisq4 = lambda *args: - outer(*truths)(*args)
 
-        opR = minimize(chisq4, 1.5, args=(z, f, sigma),
-                       method='Nelder-mead')
-        return opR['x']
+        opt_res = minimize(chisq4, 1.5, args=(z, f, sigma), method='Nelder-Mead')
+        return opt_res['x']
 
-    elif logdef == 1:
+    if VERBOSITY:
+        print('Carrying analysis for skewer', bundleObj[1])
+
+    if logdef == 1:
         nll, names, labels, guess = chisq1, names1, labels1, guess1
         ndim, kranges, lnlike = 4, kranges1, lnlike1
 
@@ -156,20 +209,33 @@ def mcmcSkewer(bundleObj, logdef=3, niter=2500, do_mcmc=True, plotit=False,
     elif logdef == 3:
         nll, names, labels, guess = chisq3, names3, labels3, guess3
         ndim, kranges, lnlike = 3, kranges3, lnlike3
-    # --------------------------------------------------------------------------
+
     # Try to fit with scipy optimize routine
-    opR = minimize(nll, guess, args=(z, f, sigma), method='Nelder-mead')
+    opt_res = minimize(nll, guess, args=(z, f, sigma), method='Nelder-Mead')
+    print('Scipy optimize results:')
+    print('Success =',  opt_res['success'], 'params =', opt_res['x'], '\n')
 
-    if VERBOSITY:
-        print('Scipy optimize results:')
-        print('Success =',  opR['success'], 'params =', opR['x'], '\n')
+    if viz:
+        if in_axes is None:
+            fig, in_axes = plt.subplots(1)
+        in_axes.errorbar(z, f, sigma, fmt='o', color='gray', alpha=0.2)
+        in_axes.plot(zline, opt_res['x'][0] * np.exp(-np.exp(opt_res['x'][1]) *
+                     (1 + zline) ** opt_res['x'][2]))
 
-    if plotit:
-        fig, ax1 = plt.subplots(1)
-        ax1.errorbar(z, f, sigma, fmt='o', alpha=0.2)
-        ax1.plot(zline, opR['x'][0] * np.exp(-np.exp(opR['x'][1]) *
-                 (1 + zline) ** opR['x'][2]), '-r')
+    if binned:
+        mu = binned_statistic(z, f, bins=binx).statistic
+        sig = binned_statistic(z, f, bins=binx, statistic=sig_func).statistic
 
+        ixs = sig > 0
+        z, f, sigma = centers[ixs], mu[ixs], sig[ixs]
+
+        if viz:
+            in_axes.errorbar(z, f, sigma, fmt='o', color='r')
+
+        nll, names, labels, guess = lsq, names3, labels3, guess3
+        ndim, kranges, lnlike = 3, kranges3, simpleln
+
+    # --------------------------------------------------------------------------
     if do_mcmc:
         np.random.seed()
 
@@ -184,8 +250,9 @@ def mcmcSkewer(bundleObj, logdef=3, niter=2500, do_mcmc=True, plotit=False,
         p0, __, __ = sampler.run_mcmc(p0, 500)
         sampler.reset()
 
+        # Production step
         sampler.run_mcmc(p0, niter)
-        print("Burn-in and Sampling completed \n")
+        print("Burn-in and production completed \n")
 
         if return_sampler:
             return sampler.chain
@@ -196,23 +263,34 @@ def mcmcSkewer(bundleObj, logdef=3, niter=2500, do_mcmc=True, plotit=False,
 
             # using percentiles as confidence intervals
             CenVal = np.median(samps, axis=0)
+
             # print BIC at the best estimate point, BIC = - 2 * ln(L_0) + k ln(n)
+            print('CHISQ_R', -2 * lnlike(CenVal, z, f, sigma) / (len(z) - 3))
             print('BIC:', -2 * lnlike(CenVal, z, f, sigma) + ndim * np.log(len(z)))
 
-            estimates = list(map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]), zip(*np.percentile(samps, [16, 50, 84], axis=0))))
+            # Rotate the points to the other basis and 1D estimates
+            # and write them to the file
+            tg_est = list(map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
+                          zip(*np.percentile(samps, [16, 50, 84], axis=0))))
 
-            if VERBOSITY:
-                for count, ele in enumerate(names):
-                    print(ele + ' = %.3f^{%.3f}_{%.3f}' %(estimates[count][0], estimates[count][1], estimates[count][2]))
+            xx = xfm(samps[:, 1:], shift, tilt, dir='up')
+            xx_est = list(map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
+                          zip(*np.percentile(xx, [16, 50, 84], axis=0))))
 
-            if plotit:
-                ax1.plot(zline, CenVal[0] * np.exp(-np.exp(CenVal[1]) * (1 + zline) ** CenVal[2]), '-g')
+            f_name2 = 'tg_est_' + str(bundleObj[1]) + '.dat'
+            np.savetxt(f_name2, tg_est)
+            f_name3 = 'xx_est_' + str(bundleObj[1]) + '.dat'
+            np.savetxt(f_name3, xx_est)
 
-            # instantiate a getdist object 
+            if viz:
+                in_axes.plot(zline, CenVal[0] * np.exp(-np.exp(CenVal[1]) *
+                             (1 + zline) ** CenVal[2]), '-g')
+
+            # instantiate a getdist object
             MC = MCSamples(samples=samps, names=names, labels=labels, ranges=kranges)
 
             # MODIFY THIS TO BE PRETTIER
-            if triangle:
+            if viz:
                 g = plots.getSubplotPlotter()
                 g.triangle_plot(MC)
 
@@ -231,54 +309,49 @@ def mcmcSkewer(bundleObj, logdef=3, niter=2500, do_mcmc=True, plotit=False,
                 logP -= logP.max()
                 logP = logP.reshape(x0.shape)
 
-                # Visualize
-                if visualize:
-                    fig, ax2 = plt.subplots(1, figsize=(5,5))
+                # Visualize the contour in modified space per skewer
+                if viz:
+                    fig, ax2 = plt.subplots(1)
                     ax2.contour(x0, x1, cts(logP), levels=[0.683, 0.955, ], colors='k')
+                    ax2.axvline(xx_est[0][0] + xx_est[0][1])
+                    ax2.axvline(xx_est[0][0] - xx_est[0][2])
+                    ax2.axhline(xx_est[1][0] + xx_est[1][1])
+                    ax2.axhline(xx_est[1][0] - xx_est[1][2])
                     ax2.set_xlabel(r'$x_0$')
                     ax2.set_ylabel(r'$x_1$')
                     plt.show()
 
                 # fileName1: the log-probability evaluated in the tilted grid
-                fileName1 = 'gridlnlike_' + str(bundleObj[1]) + '.dat'
-                np.savetxt(fileName1, logP)
-                # fileName2: the estimates of f0, ln_t0, gamma, and sigma from MCMC 
-                fileName2 = 'estimates_' + str(bundleObj[1]) + '.dat'
-                np.savetxt(fileName2, estimates)
-                # fileName3: the parameters of 2D gaussian fit to ln_t0-gamma plane
-                fileName3 = 'fitparams_' + str(bundleObj[1]) + '.dat'
-                fitparams = list(np.mean(samps[:, 1:3], 0)) + \
-                                list(np.cov(samps[:, 1:3].T).flat)
-                np.savetxt(fileName3, fitparams)
+                f_name1 = 'gridlnlike_' + str(bundleObj[1]) + '.dat'
+                np.savetxt(f_name1, logP)
 
 
+def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
+            orig_ax=None, orig_space=True, mycolor='k', mylabel='temp',
+            ls='solid', individual=False, save=True):
+    """
+    Plots the log-likelihood surface for each skewer in a given folder
 
-def gauss_like(theta, X, C):
-    from numpy.linalg import inv, det
-    # define the log-likelihood of the data
-    loc, a, corr, c = theta[0:2], np.exp(theta[2]), theta[3], np.exp(theta[4])
-    if -1 < corr < 1:
-        b = corr * np.sqrt(a * c)
-        modC = C + np.array([[a, b],[b, c]])
-        temp = [np.dot(loc - X[i], np.dot(inv(modC[i]), loc - X[i])) + np.log(det(modC[i])) for i in range(len(X))]
-        foo = 0.5 * np.sum(temp, 0)
-        return foo
-    return np.inf
-
-
-def addLogs(fname, npix=200, suffix_list=None, mod_ax=None, orig_ax=None, orig_space=True, mycolor='k', individual=True, getsys=False):
-    """Plot the log-likelihood surface for each skewer
-    Input:
-        fname: the path to the folder containing the files
+    Parameters:
+    -----------
+        fname : the path to the folder containing the files
+        npix : # of grid points in modified space
+        suffix_list : indices of the skewers to plot, None for all
+        mod_ax : axes over which to draw the contours in modified space
+        orig_ax : axes over which to draw the contours in original space
+        orig_space : do conversions to original space?
+        mycolor : edgecolor of the joint pdf contour (JPC)
+        mylabel : label of the JPC
+        ls : linestyle of JPC
+        individual : whether to draw contours for individual skewers
 
     Returns:
+    --------
         None
-        """
-    import corner
+    """
+
     import glob
     import os
-    import time
-    from plotting import plot_cov_ellipse
     from scipy.interpolate import RectBivariateSpline
 
     if not os.path.exists(fname):
@@ -289,49 +362,83 @@ def addLogs(fname, npix=200, suffix_list=None, mod_ax=None, orig_ax=None, orig_s
     os.chdir(fname)
 
     try:
-        # Read data from the files
-        file_list = glob.glob('gridlnlike*')
-        data_cube = np.empty((len(file_list), npix, npix))
+        if get_est:
+            sfx = []
+            # 1. get all the respective files
+            e_lst = glob.glob('estimates_*')
 
-        suffix = []
-        for count, ele in enumerate(file_list):
-            data_cube[count] = np.loadtxt(ele)
+            # 2. pull the names from the files and read the data
+            e_cube = np.empty((len(e_lst), 3, 3))
+            for ct, ele in enumerate(e_lst):
+                temp = str.split(ele, '_')
+                sfx.append(int(temp[1][:-4]))
+
+                e_cube[ct] = np.loadtxt(ele)
+
+            # Sort the data according to the skewer index
+            e_cube = np.array([ele for _, ele in sorted(zip(sfx, e_cube))])
+            sfx = np.array(sfx)
+            sfx.sort()
+
+            # Plotting
+            labels = [r"$f_0$", r"$\ln \tau_0$", r"$\gamma$"]
+            fig, axs = plt.subplots(nrows=3, sharex=True, figsize=(9, 5))
+            for i in range(3):
+                axs[i].errorbar(sfx, e_cube[:, i, 0], yerr=[e_cube[:, i, 2], e_cube[:, i, 1]],
+                                fmt='.-', color='k', lw=0.6)
+                axs[i].set_ylabel(labels[i])
+
+            # Stores the correlation coefficient between pixels as a function of their
+            # separation
+            coef_tau0 = [np.corrcoef([e_cube[:len(e_lst) - j, 1, 0], e_cube[j:, 1, 0]])[0, 1]
+                         for j in range(350)]
+            coef_gamma = [np.corrcoef([e_cube[:len(e_lst) - j, 2, 0], e_cube[j:, 2, 0]])[0, 1]
+                          for j in range(350)]
+
+            fig, ax = plt.subplots(1)
+            ax.plot(coef_tau0, c='r', marker='o', lw=0.6)
+            ax.plot(coef_gamma, c='b', marker='o', lw=0.6)
+            ax.set_xlabel(r'$|i-j|$')
+            ax.set_ylabel(r'$\xi$')
+
+            plt.tight_layout()
+            plt.show()
+            os.chdir(currdir)
+            return sfx, e_cube
+
+        # Do all other things after get_est has been taken care of
+        # Read data from the files
+        f_lst = glob.glob('gridlnlike_*')
+
+        d_cube = np.empty((len(f_lst), npix, npix))
+
+        # Read the skewer number from file itself for now
+        sfx = []
+        for ct, ele in enumerate(f_lst):
+            d_cube[ct] = np.loadtxt(ele)
 
             temp = str.split(ele, '_')
-            suffix.append(int(temp[1][:-4]))
+            sfx.append(int(temp[1][:-4]))
 
-        if suffix_list is not None:
-            ind = [i for i, ele in enumerate(suffix) if ele in suffix_list]
-            data_cube = data_cube[ind]
-            suffix = np.array(suffix)[ind]
+        # sort the data for visualization
+        d_cube = np.array([ele for _, ele in sorted(zip(sfx, d_cube))])
 
-        # sort for visualization in terms of restframe wavelength indices
-        data_cube = np.array([ele for _,ele in sorted(zip(suffix, data_cube))])
-        suffix.sort()
+        # Sort the index array which is now same for gridlnlike and estimates
+        sfx = np.array(sfx)
+        sfx.sort()
+
+        # choose a specific subset of the skewers
+        if sfx_lst is not None:
+            ind = [(ele in sfx_lst) for ele in sfx]
+            d_cube = d_cube[ind]
+            sfx = sfx[ind]
 
         # joint pdf ###########################################################
-        joint_pdf = np.sum(data_cube, axis=0)
+        joint_pdf = d_cube.sum(0)
+        joint_pdf -= joint_pdf.max()
 
-        # Plot indivdual skewer contours along with the joint estimate
-        if mod_ax is None:
-            fig, mod_ax = plt.subplots(1)
-
-        """ Routine to get the triangle plot in likelihood space
-        It also compute the contour in the original space using a RectBivariateSpline
-        interpolation over the data.
-        """
-        if individual:
-            colormap = plt.cm.rainbow 
-            colors = [colormap(i) for i in np.linspace(0, 1,len(suffix))]
-            for i in range(len(suffix)):
-                CS = mod_ax.contour(x0, x1, cts(data_cube[i]), levels=[0.683, ], colors=(colors[i],))
-                CS.collections[0].set_label(suffix[i])
-
-        # Plotting individual + joint contour in likelihood space
-        mod_ax.contour(x0, x1, cts(joint_pdf), levels=[0.683, 0.955], colors=(mycolor,), linestyles='--')
-        mod_ax.legend(loc = 'upper center', ncol=6)
-        mod_ax.set_xlabel('$x_0$')
-        mod_ax.set_ylabel('$x_1$')
+        if save:
+            np.savetxt('joint_pdf.dat', joint_pdf)
 
         # simple point statistics in modified space
         x0_pdf = np.sum(np.exp(joint_pdf), axis=1)
@@ -344,138 +451,87 @@ def addLogs(fname, npix=200, suffix_list=None, mod_ax=None, orig_ax=None, orig_s
         sig_x0 = np.sqrt((x0_line ** 2 * x0_pdf).sum() / x0_pdf.sum() - mu_x0 ** 2)
         sig_x1 = np.sqrt(np.sum(x1_line ** 2 * x1_pdf) / np.sum(x1_pdf) - mu_x1 ** 2)
 
-        # 1. Find the appropriate ranges in tau0-gamma space
-        corners = np.array([[mu_x0 - 5 * sig_x0, mu_x1 - 5 * sig_x1],
-                    [mu_x0 - 5 * sig_x0, mu_x1 + 5 * sig_x1], 
-                    [mu_x0 + 5 * sig_x0, mu_x1 - 5 * sig_x1], 
-                    [mu_x0 + 5 * sig_x0, mu_x1 + 5 * sig_x1]
-                    ])
-        extents = get_transform(corners, dir='down')
+        # Save the best-fit parameters in original space to a file
+        lntau_fit, gamma_fit = xfm([mu_x0, mu_x1], shift, tilt)[0]
+        np.savetxt('best-fit.dat', [mu_x0, sig_x0, mu_x1, sig_x1,
+                   lntau_fit, gamma_fit])
 
-        extent_t0 = [extents[:,0].min(), extents[:,0].max()]
-        extent_gamma = [extents[:,1].min(), extents[:,1].max()]
+        print('x0_loc = %.3f, x0_scale=%.3f' % (mu_x0, sig_x0))
+        print('x1_loc = %.3f, x1_scale=%.3f' % (mu_x1, sig_x1))
+        print('best fit parameters', xfm([mu_x0, mu_x1], shift, tilt))
+        #######################################################################
+
+        # # Plot indivdual skewer contours along with the joint estimate
+        if mod_ax is None:
+            fig, mod_ax = plt.subplots(1)
+
+        """ Routine to get the triangle plot in likelihood space
+        It also compute the contour in the original space using a
+        RectBivariateSpline interpolation over the data.
+        """
+
+        # Plotting individual + joint contour in likelihood space
+        if individual:
+            colormap = plt.cm.rainbow
+            colors = [colormap(i) for i in np.linspace(0, 1, len(sfx))]
+            for i in range(len(sfx)):
+                CS = mod_ax.contour(x0, x1, cts(d_cube[i]), levels=[0.68, ], colors=(colors[i],))
+                CS.collections[0].set_label(sfx[i])
+
+        mod_cs = mod_ax.contour(x0, x1, cts(joint_pdf), levels=[0.683, 0.955, 0.99],
+                                colors=(mycolor,), linestyles=ls)
+        mod_cs.collections[0].set_label(mylabel)
+        mod_ax.plot(mu_x0, mu_x1, '*r')
+        mod_ax.legend(loc='upper center', ncol=6)
+        mod_ax.set_xlabel('$x_0$')
+        mod_ax.set_ylabel('$x_1$')
+
+        # 1. Find the appropt_resiate ranges in tau0-gamma space
+        corners = np.array([[mu_x0 - 5 * sig_x0, mu_x1 - 5 * sig_x1],
+                           [mu_x0 - 5 * sig_x0, mu_x1 + 5 * sig_x1],
+                           [mu_x0 + 5 * sig_x0, mu_x1 - 5 * sig_x1],
+                           [mu_x0 + 5 * sig_x0, mu_x1 + 5 * sig_x1]
+                            ])
+        extents = xfm(corners, shift, tilt, dir='down',)
+
+        extent_t0 = [extents[:, 0].min(), extents[:, 0].max()]
+        extent_gamma = [extents[:, 1].min(), extents[:, 1].max()]
 
         # suitable ranges for spline interpolation in modified space
-        range_stats = np.array([mu_x0 - 5 * sig_x0, mu_x0 + 5 * sig_x0, mu_x1 - 5 * sig_x1, mu_x1 + 5 * sig_x1])
+        range_stats = np.array([mu_x0 - 5 * sig_x0, mu_x0 + 5 * sig_x0,
+                                mu_x1 - 5 * sig_x1, mu_x1 + 5 * sig_x1])
+
         mask_x0 = np.where((x0_line > range_stats[0]) & (x0_line < range_stats[1]))[0]
         mask_x1 = np.where((x1_line > range_stats[2]) & (x1_line < range_stats[3]))[0]
 
         # create a rectbivariate spline in the modified space
-        _b = RectBivariateSpline(x0_line[mask_x0], x1_line[mask_x1], cts(joint_pdf[mask_x0[:,None], mask_x1]))
+        _b = RectBivariateSpline(x0_line[mask_x0], x1_line[mask_x1],
+                                 cts(joint_pdf[mask_x0[:, None], mask_x1]))
 
         # Rectangular grid in original space
-        _tau0, _gamma = np.mgrid[extent_t0[0]:extent_t0[1]:100j, extent_gamma[0]:extent_gamma[1]:99j]
-        _point_orig = np.vstack([_tau0.ravel(), _gamma.ravel()]).T
-        _grid_in_mod = get_transform(_point_orig, dir='up')
+        _tau0, _gamma = np.mgrid[extent_t0[0]:extent_t0[1]:150j,
+                                 extent_gamma[0]:extent_gamma[1]:150j]
 
-        values_orig = _b.ev(_grid_in_mod[:,0], _grid_in_mod[:,1])
+        _point_orig = np.vstack([_tau0.ravel(), _gamma.ravel()]).T
+        _grid_in_mod = xfm(_point_orig, shift, tilt, dir='up')
+
+        values_orig = _b.ev(_grid_in_mod[:, 0], _grid_in_mod[:, 1])
         values_orig = values_orig.reshape(_tau0.shape)
-        
+
+        # Best fit + statistical errors
+        orig_estimates = marg_estimates(_tau0, _gamma, values_orig)
+
         if orig_ax is None:
             fig, orig_ax = plt.subplots(1)
-        orig_ax.contour(_tau0, _gamma,  values_orig, levels=[0.668, 0.955], colors=(mycolor,))
-
-        if get_estimates:
-            labels = [r"$f_0$", r"$\ln \tau_0$", r"$\gamma$", r"$\sigma$"]
-
-            mod_best = np.array([estimates_cube[:,1,0], estimates_cube[:,2,0]]).T
-            mod_ax.scatter(mod_best[:,0], mod_best[:,1])
-
-            orig_best = get_transform(mod_best, dir='up')
-            orig_ax.scatter(orig_best[:,0], orig_best[:,1])
-            # ax2[0].hist(estimates_cube[:,1,0])
-            # ax2[1].hist(estimates_cube[:,2,0])
+        orig_ax.contour(_tau0, _gamma,  values_orig,
+                        levels=[0.668, 0.955], colors=(mycolor,), linestyles=ls)
 
         plt.show()
-
-        if getsys:
-            # means and covariance of all the skewers
-            # the assumption is that the data comes from a 2D gaussian 
-            # is neglecting the effects of truncation valid or justifiable?
-            X = Ps[:, 0:2]
-            covMat = Ps[:, 2:].reshape(-1, 2, 2)
-            # this isn't much helpful as the contours are strongly correlated
-            [morph_gauss(X[i], covMat[i], ax=ax1, lw=0.6, a=0.6) for i in range(len(X))]
-
-            # Delegate this to another function
-            temp = plotting.gaussfit_2d(X, covMat)
-            fit_means = np.median(temp[:, 0:2], 0)
-            fit_cov = np.cov(temp[:, 0:2].T)
-
-            morph_gauss(fit_means, fit_cov, ax=ax1, fc='r', ls='dashed', lw=2) 
-
-            corner.corner(temp)
-    except:
+    except Exception as ex:
         os.chdir(currdir)
         raise
 
     os.chdir(currdir)
 
-
-def morph_gauss(pos, cov, ax=None, shift=shift, tilt=tilt, fc='k', ec=[0,0,0], a=1, lw=2, ls='solid'):
-    from scipy.special import erf
-    from scipy.stats import chi2
-    import numpy as np
-    import matplotlib.pyplot as plt
-
-    def eigsorted(cov):
-        vals, vecs = np.linalg.eigh(cov)
-        order = vals.argsort()[::-1]
-        return vals[order], vecs[:, order]
-
-    vals, vecs = eigsorted(cov)
-    theta = np.arctan2(*vecs[:,0][::-1])
-
-    scale = np.sqrt(chi2.ppf(erf(1 / np.sqrt(2)), df=2))
-    phi = np.linspace(0, 2 * np.pi, 100)
-
-    p1 = scale * np.sqrt(vals[0]) * np.cos(phi) 
-    p2 = scale * np.sqrt(vals[1]) * np.sin(phi)
-
-    x = pos[0] + p1 * np.cos(theta) - p2 * np.sin(theta)
-    y = pos[1] + p1 * np.sin(theta) + p2 * np.cos(theta)
-    points = np.vstack((x, y))
-
-    modPos = np.dot(tilt, (points - shift[:, None]))
-
-    if ax is None:
-        fig, ax = plt.subplots()
-
-    ax.plot(modPos[0], modPos[1], lw=lw, alpha=a, color=fc, ls=ls)
-    plt.show()
-
-
-def get_transform(pos, dir='up'):
-    if np.array(pos).ndim == 1:
-        pos = np.array(pos)[None, :]
-    if dir == 'up':
-        return np.dot((pos - shift), tilt.T)
-    elif dir == 'down':
-        return np.dot(np.linalg.inv(tilt), pos.T).T + shift
-
-
-
-if __name__=="__main__":
-    # fNames = ['3_rpix_distort_1060_1170', '4_rpix_distort_1060_1170', '5_rpix_distort_1060_1170', '1_rpix_distort_1060_1170', '2_rpix_distort_1060_1170', 'testcode9_1060_1170', 'testcode8_1060_1170']
-    fNames = ['testcode9_1060_1170',]
-
-    colormap = plt.cm.rainbow
-    colors = [colormap(i) for i in np.linspace(0, 1,len(fNames))]
-
-    fig, ax = plt.subplots(1)
-    for count, ele in enumerate(fNames):
-        curr_ele = '/uufs/astro.utah.edu/common/home/u0882817/Work/OptDepth/LogLikes/Bin_' + ele
-        addLogs(curr_ele, ax=ax, individual=False, mycolor=colors[count])
-
-    nlines = 50
-    t0_bins = np.linspace(-14, 4, nlines)
-    gamma_bins = np.linspace(-2, 9, nlines)
-
-    for x in t0_bins:
-        locX = np.vstack((x * np.ones(nlines), gamma_bins))
-        locXprime = np.dot(tilt, locX - shift[:, None])
-        ax.plot(locXprime[0], locXprime[1], 'r', lw=0.6)
-    for y in gamma_bins:
-        locX = np.vstack((t0_bins, (y * np.ones(nlines))))
-        locXprime = np.dot(tilt, locX - shift[:, None])
-        ax.plot(locXprime[0], locXprime[1], 'k', lw=0.6)
+if __name__ == "__main__":
+    pass
