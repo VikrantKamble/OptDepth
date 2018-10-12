@@ -3,7 +3,8 @@ import matplotlib.pyplot as plt
 from scipy.stats import binned_statistic
 
 
-def var_correct(qso, rest_ranges, zq_range=[3, 3.5], fit_model=True):
+def var_correct(qso, rest_ranges, zq_range=[3, 3.5], fit_model=True,
+                savefile=False):
     """ Corrections to the vriance assigned to the pixels by the pipeline
 
     Notes:
@@ -11,7 +12,7 @@ def var_correct(qso, rest_ranges, zq_range=[3, 3.5], fit_model=True):
         2. If the spectra changes by a lot(isn't flat), it will lead to
                underestimates of eta
     """
-    zq_ind = np.where((qso.zq > zq_range[0]) & (qso.zq <= zq_range[1]))[0]
+    zq_ind = np.where((qso.zq > zq_range[0]) & (qso.zq <= zq_range[1]) & (qso.sn > 5))[0]
 
     # restframe ranges over which to analyze
     # currently this allows for only a single bin
@@ -57,22 +58,26 @@ def var_correct(qso, rest_ranges, zq_range=[3, 3.5], fit_model=True):
     X = bin_edges[1:] - bin_width/2
 
     # plot the results if specified
-    plt.plot(X, y, '+', color='k', markersize=8)
+    fig, ax = plt.subplots(1)
+    ax.plot(X, y, '+', color='k', markersize=8)
 
     # fit a simple piecewise function to the data
     if fit_model:
         popt1 = np.polyfit(X[X < 5850], y[X < 5850], deg=1)
         popt2 = np.polyfit(X[X > 5850], y[X > 5850], deg=2)
-
-        xline = np.linspace(3500, 7500, 1000)
-        plt.plot(xline, np.polyval(popt1, xline), '-k')
-        plt.plot(xline, np.polyval(popt2, xline), '--k')
+        xline1 = np.linspace(3500, 5850, 100)
+        ax.plot(xline1, np.polyval(popt1, xline1), '-r')
+        xline2 = np.linspace(5850, 7500, 100)
+        ax.plot(xline2, np.polyval(popt2, xline2), '--r')
+        ax.set_xlabel(r'$\lambda_\mathrm{obs} [\mathrm{\AA}]$')
         plt.show()
 
-        np.savetxt("var_correct.txt", list(popt1) + list(popt2))
+        if savefile:
+            np.savetxt("var_correct.txt", list(popt1) + list(popt2))
 
 
-def calibrate(wl, spec, ivar, zq, rest_range, norm_min, norm_max, plotit, savefile):
+def calibrate(wl, spec, ivar, zq, rest_range, norm_min, norm_max, savetag,
+              plotit=False):
     """ Obtain flux calibration vector by doing optical depth analysis redwards
         of Lyman-Alpha
 
@@ -101,7 +106,7 @@ def calibrate(wl, spec, ivar, zq, rest_range, norm_min, norm_max, plotit, savefi
     NormFlux = cflux / nValue
     NormIvar = civar * nValue ** 2
 
-    pixObs, = np.ravel(lam_obs)
+    pixObs = np.ravel(lam_obs)
     pixFlux, pixIvar = np.ravel(NormFlux), np.ravel(NormIvar)
 
     # Controls the smoothing of the results
@@ -119,17 +124,18 @@ def calibrate(wl, spec, ivar, zq, rest_range, norm_min, norm_max, plotit, savefi
     Lvec = (ObsBin[1:] + ObsBin[:-1])/2.
 
     if plotit:
-        # plt.figure(figsize=(10 , 4))
+        plt.figure()
         good = Cvec != 0
-        plt.plot(Lvec[good], Cvec[good], '-r')
-        plt.xlabel(r'$\lambda_{obs}$', fontsize=20)
-        plt.ylabel(r'$Correction$', fontsize=20)
+        plt.plot(Lvec[good], Cvec[good], '-k', lw=0.6)
+        plt.xlabel(r'$\lambda_{obs}$')
+        plt.ylabel(r'$Correction$')
         # plt.xlim(1.8 , 3)
         plt.ylim(0.9, 1.1)
         plt.axhline(1, c='r')
         plt.show()
 
-        if savefile:
-            np.savetxt('../Data/calibration.dat', [Lvec[good], Cvec[good]])
+        if savetag is not None:
+            np.savetxt('../Data/calibration' + savetag + '.dat',
+                       [Lvec[good], Cvec[good]])
 
 # EOF

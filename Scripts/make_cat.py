@@ -1,4 +1,4 @@
-# @@ PYTHON SCRIPT TO CREATE A CUSTOM QUASAR CATALOG FROM DR12Q
+""" PYTHON SCRIPT TO CREATE A CUSTOM QUASAR CATALOG FROM DR12Q """
 
 from collections import OrderedDict
 from PyAstronomy import pyasl
@@ -18,7 +18,6 @@ def main():
         sys.exit("Errors! Couldn't locate section in .ini file")
 
     data = fitsio.read(X['drqcat'], ext=int(X['drq_dataext']))
-
     plate, mjd, fiberid = data['PLATE'], data['MJD'], data['FIBERID']
 
     # Which redshift to use?
@@ -26,7 +25,7 @@ def main():
 
     # Getting the extinction
     g_ext = data['EXTINCTION'][:, 1]
-    ebv = g_ext/3.793
+    ebv = g_ext / 3.793
     # ref:  Schlegel, Finkbeiner & Davis 1998 (ApJ 500, 525, 1998; SFD98)
 
     print("The total number of objects in the catalog are %d" % len(ebv))
