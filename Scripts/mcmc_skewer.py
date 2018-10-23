@@ -7,27 +7,11 @@ from scipy.stats import binned_statistic
 from getdist import plots, MCSamples
 from astroML.plotting.mcmc import convert_to_stdev as cts
 
-from plotting import marg_estimates
+from Scripts import helper
 
 # global parameters
 binx = np.arange(2.0, 4.61, 0.05)
 centers = (binx[1:] + binx[:-1]) / 2.
-
-
-def xfm(pos, shift, tilt, dir='down'):
-    """
-    Perform conversion from one system to another
-
-    dir : direction to do the transform
-        up : orig to mod
-        down(default) : mod to orig
-    """
-    if np.array(pos).ndim == 1:
-        pos = np.array(pos)[None, :]
-    if dir == 'up':
-        return np.dot((pos - shift), tilt.T)
-    elif dir == 'down':
-        return np.dot(np.linalg.inv(tilt), pos.T).T + shift
 
 
 # function to return std deviation using bootstrapping
@@ -270,10 +254,12 @@ def mcmcSkewer(bundleObj, logdef=3, binned=False, niter=2500, do_mcmc=True,
 
             # Rotate the points to the other basis and 1D estimates
             # and write them to the file
+
+            # Format : center, top error, bottom error
             tg_est = list(map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
                           zip(*np.percentile(samps, [16, 50, 84], axis=0))))
 
-            xx = xfm(samps[:, 1:], shift, tilt, dir='up')
+            xx = helper.xfm(samps[:, 1:], shift, tilt, dir='up')
             xx_est = list(map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
                           zip(*np.percentile(xx, [16, 50, 84], axis=0))))
 
@@ -452,13 +438,13 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
         sig_x1 = np.sqrt(np.sum(x1_line ** 2 * x1_pdf) / np.sum(x1_pdf) - mu_x1 ** 2)
 
         # Save the best-fit parameters in original space to a file
-        lntau_fit, gamma_fit = xfm([mu_x0, mu_x1], shift, tilt)[0]
+        lntau_fit, gamma_fit = helper.xfm([mu_x0, mu_x1], shift, tilt)[0]
         np.savetxt('best-fit.dat', [mu_x0, sig_x0, mu_x1, sig_x1,
                    lntau_fit, gamma_fit])
 
         print('x0_loc = %.3f, x0_scale=%.3f' % (mu_x0, sig_x0))
         print('x1_loc = %.3f, x1_scale=%.3f' % (mu_x1, sig_x1))
-        print('best fit parameters', xfm([mu_x0, mu_x1], shift, tilt))
+        print('best fit parameters', helper.xfm([mu_x0, mu_x1], shift, tilt))
         #######################################################################
 
         # # Plot indivdual skewer contours along with the joint estimate
@@ -492,7 +478,7 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
                            [mu_x0 + 5 * sig_x0, mu_x1 - 5 * sig_x1],
                            [mu_x0 + 5 * sig_x0, mu_x1 + 5 * sig_x1]
                             ])
-        extents = xfm(corners, shift, tilt, dir='down',)
+        extents = helper.xfm(corners, shift, tilt, dir='down',)
 
         extent_t0 = [extents[:, 0].min(), extents[:, 0].max()]
         extent_gamma = [extents[:, 1].min(), extents[:, 1].max()]
@@ -513,13 +499,13 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
                                  extent_gamma[0]:extent_gamma[1]:150j]
 
         _point_orig = np.vstack([_tau0.ravel(), _gamma.ravel()]).T
-        _grid_in_mod = xfm(_point_orig, shift, tilt, dir='up')
+        _grid_in_mod = helper.xfm(_point_orig, shift, tilt, dir='up')
 
         values_orig = _b.ev(_grid_in_mod[:, 0], _grid_in_mod[:, 1])
         values_orig = values_orig.reshape(_tau0.shape)
 
         # Best fit + statistical errors
-        orig_estimates = marg_estimates(_tau0, _gamma, values_orig)
+        orig_estimates = helper.marg_estimates(_tau0, _gamma, values_orig)
 
         if orig_ax is None:
             fig, orig_ax = plt.subplots(1)

@@ -1,7 +1,9 @@
 import numpy as np
-from bin_analyze import analyze
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
+
+# local imports
+from Scripts.bin_analyze import analyze
 
 
 class binObj:
@@ -9,6 +11,9 @@ class binObj:
         optical depth is calculated
     """
     ly_line = 1215.67
+
+    input_calib = '/Users/vikrant/Work/MyProject/OptDepth/Data/calib_helion.txt'
+    input_var_correct = '/Users/vikrant/Work/MyProject/OptDepth/Data/var_correct.txt'
 
     def __init__(self, name, qso, parNames, parRanges, snt=[2, 100], preprocess=True,
                  **kwargs):
@@ -97,7 +102,7 @@ class binObj:
         mask2 = (self._wAbs > 3959) & (self._wAbs < 3976)
         self._ivar[mask2] = 0
 
-    def vcorrect(self, vcorrect_file='var_correct.txt'):
+    def vcorrect(self, vcorrect_file=input_var_correct):
         """ Apply variance corrections to the ivar vector """
         coeff = np.loadtxt(vcorrect_file)
 
@@ -108,7 +113,7 @@ class binObj:
         self.vcorrected = True
         print('Variance corrections applied')
 
-    def calib_correct(self, calib_file='../Data/calib_helion.txt'):
+    def calib_correct(self, calib_file=input_calib):
         """ Use this to correct for flux calibrations in BOSS/eBOSS """
         calib_file = np.loadtxt(calib_file)
         interp_func = interp1d(calib_file[:, 0], calib_file[:, 1],

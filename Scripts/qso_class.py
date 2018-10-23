@@ -10,11 +10,13 @@ import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import fitsio
-import param_fit
 
+# Relative imports
+import Scripts
+from Scripts import param_fit
 
 PARSER = ConfigParser()
-PARSER.read('config.ini')
+PARSER.read(Scripts.__path__[0] + '/config.ini')
 
 print(PARSER.sections())
 

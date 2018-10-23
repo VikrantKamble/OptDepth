@@ -7,10 +7,11 @@ from timeit import default_timer as timer
 from multiprocessing import Pool
 from functools import partial
 
-import corrections
-import comp_simple
-import get_comp
-import mcmc_skewer
+# local imports
+from Scripts import corrections
+from Scripts import comp_simple
+from Scripts import get_comp
+from Scripts import mcmc_skewer
 
 imp.reload(comp_simple)
 imp.reload(mcmc_skewer)
