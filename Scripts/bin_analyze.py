@@ -108,15 +108,14 @@ def hist_weights(p1, p2, z, zbins, n_chop=4, truncated=True):
     # Final histogram weights to be applied
     h_weights = weight_mat[z_ind - 1, foo - 1, blah - 1]
 
-    """
-    # To verify that the histogram rebinning has been done correctly
-    for i in range(n_zbins):
-        ind = (z >= zbins[i]) & (z < zbins[i + 1])
-        plt.figure()
-        plt.hist2d(p1[ind], p2[ind], bins=(chop1, chop2), weights=h_weights[ind], normed=True)[0]
-        plt.colorbar()
-    plt.show()
-    """
+    # # To verify that the histogram rebinning has been done correctly
+    # for i in range(n_zbins):
+    #     ind = (z >= zbins[i]) & (z < zbins[i + 1])
+    #     plt.figure()
+    #     plt.hist2d(p1[ind], p2[ind], bins=(chop1, chop2), weights=h_weights[ind], normed=True)[0]
+    #     plt.colorbar()
+    # plt.show()
+
     return h_weights
 
 
@@ -156,7 +155,7 @@ def analyze(binObj, task='skewer', rpix=False, distort=True, CenAlpha=None,
 
     # B. DATA PREPROCESSING ---------------------------------------------------
     if histbin:
-        """ Histogram binning in parameter space """
+        # Histogram binning in parameter space
         myp1, myp2 = binObj._par1, binObj._par2
 
         myzbins = find_zbins(myz)

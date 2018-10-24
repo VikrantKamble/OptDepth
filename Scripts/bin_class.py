@@ -15,7 +15,7 @@ class binObj:
     input_calib = '/Users/vikrant/Work/MyProject/OptDepth/Data/calib_helion.txt'
     input_var_correct = '/Users/vikrant/Work/MyProject/OptDepth/Data/var_correct.txt'
 
-    def __init__(self, name, qso, parNames, parRanges, snt=[2, 100], preprocess=True,
+    def __init__(self, name, qso, parNames, parRanges, snt, preprocess=True,
                  **kwargs):
         print('Building object')
 

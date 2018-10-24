@@ -313,8 +313,8 @@ def mcmcSkewer(bundleObj, logdef=3, binned=False, niter=2500, do_mcmc=True,
 
 
 def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
-            orig_ax=None, orig_space=True, mycolor='k', mylabel='temp',
-            ls='solid', individual=False, save=True):
+            basis='orig', orig_ax=None, orig_space=True, mycolor='k',
+            mylabel='temp', ls='solid', individual=False, save=True, model=False):
     """
     Plots the log-likelihood surface for each skewer in a given folder
 
@@ -349,17 +349,24 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
 
     try:
         if get_est:
+            if basis == "orig":
+                n_dim = 3
+                e_lst = glob.glob('tg_est*')
+                labels = [r"$f_0$", r"$\ln \tau_0$", r"$\gamma$"]
+            else:
+                n_dim = 2
+                e_lst = glob.glob('xx_est*')
+                labels = [r"$x_0$", r"$x_1$"]
+
             sfx = []
-            # 1. get all the respective files
-            e_lst = glob.glob('estimates_*')
 
             # 2. pull the names from the files and read the data
-            e_cube = np.empty((len(e_lst), 3, 3))
+            e_cube = np.empty((len(e_lst), n_dim, 3))
             for ct, ele in enumerate(e_lst):
                 temp = str.split(ele, '_')
-                sfx.append(int(temp[1][:-4]))
+                sfx.append(int(temp[2][:-4]))
 
-                e_cube[ct] = np.loadtxt(ele)
+            e_cube[ct] = np.loadtxt(ele)
 
             # Sort the data according to the skewer index
             e_cube = np.array([ele for _, ele in sorted(zip(sfx, e_cube))])
@@ -367,25 +374,17 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
             sfx.sort()
 
             # Plotting
-            labels = [r"$f_0$", r"$\ln \tau_0$", r"$\gamma$"]
-            fig, axs = plt.subplots(nrows=3, sharex=True, figsize=(9, 5))
-            for i in range(3):
+            fig, axs = plt.subplots(nrows=n_dim, sharex=True, figsize=(9, 5))
+
+            for i in range(n_dim):
                 axs[i].errorbar(sfx, e_cube[:, i, 0], yerr=[e_cube[:, i, 2], e_cube[:, i, 1]],
                                 fmt='.-', color='k', lw=0.6)
                 axs[i].set_ylabel(labels[i])
 
-            # Stores the correlation coefficient between pixels as a function of their
-            # separation
-            coef_tau0 = [np.corrcoef([e_cube[:len(e_lst) - j, 1, 0], e_cube[j:, 1, 0]])[0, 1]
-                         for j in range(350)]
-            coef_gamma = [np.corrcoef([e_cube[:len(e_lst) - j, 2, 0], e_cube[j:, 2, 0]])[0, 1]
-                          for j in range(350)]
-
-            fig, ax = plt.subplots(1)
-            ax.plot(coef_tau0, c='r', marker='o', lw=0.6)
-            ax.plot(coef_gamma, c='b', marker='o', lw=0.6)
-            ax.set_xlabel(r'$|i-j|$')
-            ax.set_ylabel(r'$\xi$')
+            # Best-fit after modeling correlation matrix
+            if model:
+                loc0, sig0 = helper.get_corrfunc(e_cube[:, -2, 0], e_cube[:, -2, 2])
+                loc1, sig1 = helper.get_corrfunc(e_cube[:, -1, 0], e_cube[:, -1, 2])
 
             plt.tight_layout()
             plt.show()
@@ -472,7 +471,7 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
         mod_ax.set_xlabel('$x_0$')
         mod_ax.set_ylabel('$x_1$')
 
-        # 1. Find the appropt_resiate ranges in tau0-gamma space
+        # 1. Find the appropriate ranges in tau0-gamma space
         corners = np.array([[mu_x0 - 5 * sig_x0, mu_x1 - 5 * sig_x1],
                            [mu_x0 - 5 * sig_x0, mu_x1 + 5 * sig_x1],
                            [mu_x0 + 5 * sig_x0, mu_x1 - 5 * sig_x1],
@@ -506,6 +505,7 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
 
         # Best fit + statistical errors
         orig_estimates = helper.marg_estimates(_tau0, _gamma, values_orig)
+        print(orig_estimates)
 
         if orig_ax is None:
             fig, orig_ax = plt.subplots(1)
