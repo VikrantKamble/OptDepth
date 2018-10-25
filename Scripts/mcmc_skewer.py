@@ -314,7 +314,8 @@ def mcmcSkewer(bundleObj, logdef=3, binned=False, niter=2500, do_mcmc=True,
 
 def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
             basis='orig', orig_ax=None, orig_space=True, mycolor='k',
-            mylabel='temp', ls='solid', individual=False, save=True, model=False):
+            mylabel='temp', ls='solid', individual=False, save=True, model=False,
+            force=False, plot_marg=True):
     """
     Plots the log-likelihood surface for each skewer in a given folder
 
@@ -396,48 +397,50 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
             return sfx, e_cube
 
         # Do all other things after get_est has been taken care of
+        # Add pdf from all the skewers - bypass if already carried out
         # Read data from the files
-        f_lst = glob.glob('gridlnlike_*')
+        if not os.path.isfile('joint_pdf.dat') or force:
+            f_lst = glob.glob('gridlnlike_*')
 
-        d_cube = np.empty((len(f_lst), npix, npix))
+            d_cube = np.empty((len(f_lst), npix, npix))
 
-        # Read the skewer number from file itself for now
-        sfx = []
-        for ct, ele in enumerate(f_lst):
-            d_cube[ct] = np.loadtxt(ele)
+            # Read the skewer number from file itself for now
+            sfx = []
+            for ct, ele in enumerate(f_lst):
+                d_cube[ct] = np.loadtxt(ele)
 
-            temp = str.split(ele, '_')
-            sfx.append(int(temp[1][:-4]))
+                temp = str.split(ele, '_')
+                sfx.append(int(temp[1][:-4]))
 
-        # sort the data for visualization
-        d_cube = np.array([ele for _, ele in sorted(zip(sfx, d_cube))])
+            # sort the data for visualization
+            d_cube = np.array([ele for _, ele in sorted(zip(sfx, d_cube))])
 
-        # Sort the index array which is now same for gridlnlike and estimates
-        sfx = np.array(sfx)
-        sfx.sort()
+            sfx = np.array(sfx)
+            sfx.sort()
 
-        # choose a specific subset of the skewers
-        if sfx_lst is not None:
-            ind = [(ele in sfx_lst) for ele in sfx]
-            d_cube = d_cube[ind]
-            sfx = sfx[ind]
+            # choose a specific subset of the skewers
+            if sfx_lst is not None:
+                ind = [(ele in sfx_lst) for ele in sfx]
+                d_cube = d_cube[ind]
+                sfx = sfx[ind]
 
-        # joint pdf ###########################################################
-        joint_pdf = d_cube.sum(0)
-        joint_pdf -= joint_pdf.max()
-
-        if save:
-            np.savetxt('joint_pdf.dat', joint_pdf)
+            # joint pdf #######################################################
+            joint_pdf = d_cube.sum(0)
+            joint_pdf -= joint_pdf.max()
+            if save:
+                np.savetxt('joint_pdf.dat', joint_pdf)
+        else:
+            print("****** File already exists. Reading from it *******")
+            joint_pdf = np.loadtxt('joint_pdf.dat')
 
         # simple point statistics in modified space
-        print("Modified space estimates:")
-        mu_x0, sig_x0, mu_x1, sig_x1 = helper.marg_estimates(x0_line, x1_line,
-                                                             joint_pdf)
-        np.savetxt('best-fit.dat', [mu_x0, sig_x0, mu_x1, sig_x1])
-
-        # # Plot indivdual skewer contours along with the joint estimate
         if mod_ax is None:
             fig, mod_ax = plt.subplots(1)
+
+        print("Modified space estimates:")
+        res = helper.marg_estimates(x0_line, x1_line, joint_pdf,
+                                    mod_ax, plot_marg, labels=["x_0", "x_1"])
+        mu_x0, sig_x0, mu_x1, sig_x1 = res
 
         # Plotting individual + joint contour in likelihood space
         if individual:
@@ -447,10 +450,6 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
                 CS = mod_ax.contour(x0, x1, cts(d_cube[i]), levels=[0.68, ], colors=(colors[i],))
                 CS.collections[0].set_label(sfx[i])
 
-        mod_cs = mod_ax.contour(x0, x1, cts(joint_pdf), levels=[0.683, 0.955, 0.99],
-                                colors=(mycolor,), linestyles=ls)
-        mod_cs.collections[0].set_label(mylabel)
-        mod_ax.plot(mu_x0, mu_x1, '*r')
         mod_ax.legend(loc='upper center', ncol=6)
         mod_ax.set_xlabel('$x_0$')
         mod_ax.set_ylabel('$x_1$')
@@ -470,12 +469,14 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
         range_stats = np.array([mu_x0 - 5 * sig_x0, mu_x0 + 5 * sig_x0,
                                 mu_x1 - 5 * sig_x1, mu_x1 + 5 * sig_x1])
 
-        mask_x0 = np.where((x0_line > range_stats[0]) & (x0_line < range_stats[1]))[0]
-        mask_x1 = np.where((x1_line > range_stats[2]) & (x1_line < range_stats[3]))[0]
+        mask_x0 = np.where((x0_line > range_stats[0]) &
+                           (x0_line < range_stats[1]))[0]
+        mask_x1 = np.where((x1_line > range_stats[2]) &
+                           (x1_line < range_stats[3]))[0]
 
-        # create a rectbivariate spline in the modified space
+        # create a rectbivariate spline in the modified space logP
         _b = RectBivariateSpline(x0_line[mask_x0], x1_line[mask_x1],
-                                 (joint_pdf[mask_x0[:, None], mask_x1]))
+                                 joint_pdf[mask_x0[:, None], mask_x1])
 
         # Rectangular grid in original space
         _tau0, _gamma = np.mgrid[extent_t0[0]:extent_t0[1]:500j,
@@ -488,14 +489,11 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
         values_orig = values_orig.reshape(_tau0.shape)
 
         # Best fit + statistical errors
-        print("\nOriginal space estimates:")
-        helper.marg_estimates(_tau0[:, 0], _gamma[0], values_orig)
-
+        print("Original space estimates:")
         if orig_ax is None:
             fig, orig_ax = plt.subplots(1)
-        orig_ax.contour(_tau0, _gamma,  cts(values_orig),
-                        levels=[0.668, 0.955], colors=(mycolor,), linestyles=ls)
-        return _tau0, _gamma, values_orig
+        helper.marg_estimates(_tau0[:, 0], _gamma[0], values_orig,
+                              orig_ax, plot_marg, labels=[r"\ln \tau_0", "\gamma"])
 
         plt.show()
     except Exception as ex:
