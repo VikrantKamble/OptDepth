@@ -124,7 +124,7 @@ kranges3 = {'f0': (0, 3), 't0': (-14, 4), 'gamma': (-2, 9)}
 shift = np.array([-5.27, 3.21])
 tilt = np.array([[-0.8563,  0.5165], [0.5165,  0.8563]])
 
-# x0, x1 = np.mgrid[-1:2:200j, -0.18:0.02:200j]
+# x0, x1 = np.mgrid[-1.16:1.84:200j, -0.13:0.07:200j]
 x0, x1 = np.mgrid[-7:10:200j, -0.25:0.25:200j]
 
 # Changed this
@@ -366,7 +366,7 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
                 temp = str.split(ele, '_')
                 sfx.append(int(temp[2][:-4]))
 
-            e_cube[ct] = np.loadtxt(ele)
+                e_cube[ct] = np.loadtxt(ele)
 
             # Sort the data according to the skewer index
             e_cube = np.array([ele for _, ele in sorted(zip(sfx, e_cube))])
@@ -383,8 +383,12 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
 
             # Best-fit after modeling correlation matrix
             if model:
-                loc0, sig0 = helper.get_corrfunc(e_cube[:, -2, 0], e_cube[:, -2, 2])
-                loc1, sig1 = helper.get_corrfunc(e_cube[:, -1, 0], e_cube[:, -1, 2])
+                loc0, sig0 = helper.get_corrfunc(e_cube[:, -2, 0], e_cube[:, -2, 1],
+                                                 model=True, est=True)
+                print(loc0, sig0)
+                loc1, sig1 = helper.get_corrfunc(e_cube[:, -1, 0], e_cube[:, -1, 1],
+                                                 model=True, est=True)
+                print(loc1, sig1)
 
             plt.tight_layout()
             plt.show()
@@ -426,34 +430,14 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
             np.savetxt('joint_pdf.dat', joint_pdf)
 
         # simple point statistics in modified space
-        x0_pdf = np.sum(np.exp(joint_pdf), axis=1)
-        x0_pdf /= x0_pdf.sum() * (x0_line[1] - x0_line[0])
-        x1_pdf = np.sum(np.exp(joint_pdf), axis=0)
-        x0_pdf /= x0_pdf.sum() * (x0_line[1] - x0_line[0])
-
-        mu_x0 = (x0_line * x0_pdf).sum() / x0_pdf.sum()
-        mu_x1 = (x1_line * x1_pdf).sum() / x1_pdf.sum()
-        sig_x0 = np.sqrt((x0_line ** 2 * x0_pdf).sum() / x0_pdf.sum() - mu_x0 ** 2)
-        sig_x1 = np.sqrt(np.sum(x1_line ** 2 * x1_pdf) / np.sum(x1_pdf) - mu_x1 ** 2)
-
-        # Save the best-fit parameters in original space to a file
-        lntau_fit, gamma_fit = helper.xfm([mu_x0, mu_x1], shift, tilt)[0]
-        np.savetxt('best-fit.dat', [mu_x0, sig_x0, mu_x1, sig_x1,
-                   lntau_fit, gamma_fit])
-
-        print('x0_loc = %.3f, x0_scale=%.3f' % (mu_x0, sig_x0))
-        print('x1_loc = %.3f, x1_scale=%.3f' % (mu_x1, sig_x1))
-        print('best fit parameters', helper.xfm([mu_x0, mu_x1], shift, tilt))
-        #######################################################################
+        print("Modified space estimates:")
+        mu_x0, sig_x0, mu_x1, sig_x1 = helper.marg_estimates(x0_line, x1_line,
+                                                             joint_pdf)
+        np.savetxt('best-fit.dat', [mu_x0, sig_x0, mu_x1, sig_x1])
 
         # # Plot indivdual skewer contours along with the joint estimate
         if mod_ax is None:
             fig, mod_ax = plt.subplots(1)
-
-        """ Routine to get the triangle plot in likelihood space
-        It also compute the contour in the original space using a
-        RectBivariateSpline interpolation over the data.
-        """
 
         # Plotting individual + joint contour in likelihood space
         if individual:
@@ -491,11 +475,11 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
 
         # create a rectbivariate spline in the modified space
         _b = RectBivariateSpline(x0_line[mask_x0], x1_line[mask_x1],
-                                 cts(joint_pdf[mask_x0[:, None], mask_x1]))
+                                 (joint_pdf[mask_x0[:, None], mask_x1]))
 
         # Rectangular grid in original space
-        _tau0, _gamma = np.mgrid[extent_t0[0]:extent_t0[1]:150j,
-                                 extent_gamma[0]:extent_gamma[1]:150j]
+        _tau0, _gamma = np.mgrid[extent_t0[0]:extent_t0[1]:500j,
+                                 extent_gamma[0]:extent_gamma[1]:501j]
 
         _point_orig = np.vstack([_tau0.ravel(), _gamma.ravel()]).T
         _grid_in_mod = helper.xfm(_point_orig, shift, tilt, dir='up')
@@ -504,13 +488,14 @@ def addLogs(fname, npix=200, sfx_lst=None, mod_ax=None, get_est=False,
         values_orig = values_orig.reshape(_tau0.shape)
 
         # Best fit + statistical errors
-        orig_estimates = helper.marg_estimates(_tau0, _gamma, values_orig)
-        print(orig_estimates)
+        print("\nOriginal space estimates:")
+        helper.marg_estimates(_tau0[:, 0], _gamma[0], values_orig)
 
         if orig_ax is None:
             fig, orig_ax = plt.subplots(1)
-        orig_ax.contour(_tau0, _gamma,  values_orig,
+        orig_ax.contour(_tau0, _gamma,  cts(values_orig),
                         levels=[0.668, 0.955], colors=(mycolor,), linestyles=ls)
+        return _tau0, _gamma, values_orig
 
         plt.show()
     except Exception as ex:

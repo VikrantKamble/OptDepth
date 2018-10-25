@@ -14,6 +14,8 @@ mpl.rcParams['ytick.direction'] = 'in'
 mpl.rcParams['axes.labelsize'] = 18
 mpl.rcParams['axes.titlesize'] = 18
 mpl.rcParams['axes.linewidth'] = 0.6
+mpl.rcParams['lines.linewidth'] = 0.6
+
 
 mpl.rcParams['legend.fancybox'] = False
 mpl.rcParams['legend.edgecolor'] = 'k'

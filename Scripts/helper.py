@@ -24,7 +24,7 @@ def xfm(pos, shift, tilt, dir='down'):
         return np.dot(np.linalg.inv(tilt), pos.T).T + shift
 
 
-def marg_estimates(x0, x1, joint_pdf):
+def marg_estimates(x0_line, x1_line, joint_pdf):
     """
     Marginalized statistics that follows from a jont likelihood.
     Simple mean and standard deviation estimates.
@@ -37,8 +37,6 @@ def marg_estimates(x0, x1, joint_pdf):
     Returns:
         [loc_x0, sig_x0, loc_x1, sig_x1]
     """
-    x0_line, x1_line = x0[:, 0], x1[0]
-
     x0_pdf = np.sum(np.exp(joint_pdf), axis=1)
     x0_pdf /= x0_pdf.sum() * (x0_line[1] - x0_line[0])
     x1_pdf = np.sum(np.exp(joint_pdf), axis=0)
@@ -47,10 +45,22 @@ def marg_estimates(x0, x1, joint_pdf):
     mu_x0 = (x0_line * x0_pdf).sum() / x0_pdf.sum()
     mu_x1 = (x1_line * x1_pdf).sum() / x1_pdf.sum()
     sig_x0 = np.sqrt((x0_line ** 2 * x0_pdf).sum() / x0_pdf.sum() - mu_x0 ** 2)
-    sig_x1 = np.sqrt(np.sum(x1_line ** 2 * x1_pdf) / np.sum(x1_pdf) - mu_x1 ** 2)
+    sig_x1 = np.sqrt((x1_line ** 2 * x1_pdf).sum() / x1_pdf.sum() - mu_x1 ** 2)
 
-    print("%.4f pm %.4f" %(mu_x0, sig_x0))
-    print("%.4f pm %.4f" %(mu_x1, sig_x1))
+    print("param1 = %.4f pm %.4f" % (mu_x0, sig_x0))
+    print("param2 = %.4f pm %.4f" % (mu_x1, sig_x1))
+
+    fig, ax = plt.subplots(ncols=2)
+    ax[0].plot(x0_line, x0_pdf)
+    ax[0].axvline(mu_x0 - sig_x0)
+    ax[0].axvline(mu_x0 + sig_x0)
+
+    ax[1].plot(x1_line, x1_pdf)
+    ax[1].axvline(mu_x1 - sig_x1)
+    ax[1].axvline(mu_x1 + sig_x1)
+
+    plt.tight_layout()
+    plt.show()
 
     return mu_x0, sig_x0, mu_x1, sig_x1
 
@@ -60,7 +70,7 @@ def get_corrfunc(x, x_err=None, n_frac=2, viz=True,
     """
     Auto correlation of a signal and mean estimation
 
-    Parameters:
+    Parameters
         x : samples of the first variable
         x_err : error vector for the first variable
         n_frac : number of pixels over which to estiamte correlation wrt
@@ -86,7 +96,7 @@ def get_corrfunc(x, x_err=None, n_frac=2, viz=True,
             # A simple exponential model
             return np.exp(- x / cl)
 
-        popt, __ = curve_fit(model_func, np.arange(npp // n_frac), coef)
+        popt, __ = curve_fit(model_func, np.arange(npp // n_frac)[:20], coef[:20])
 
         if viz:
             x_plot = np.linspace(0, 50, 50)
